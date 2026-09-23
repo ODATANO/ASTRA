@@ -538,7 +538,9 @@
   document.querySelectorAll('#windowSeg button').forEach((b) => { b.classList.toggle('on', b.dataset.window === state.window); b.addEventListener('click', () => setWindow(b.dataset.window)); });
   $('refresh').addEventListener('click', loadAll);
   $('heroBase').textContent = new URL(API, location.href).href;
-  $('apiLink').href = url('/$metadata');
+  // "API" leads to the readable reference on the network's API pages (astra.<net> -> api.<net>,
+  // the ASTRA section); $metadata is the fallback for a host without that twin (local work).
+  $('apiLink').href = /^astra\./.test(location.hostname) ? `https://api.${location.hostname.slice(6)}/reference#AstraService` : url('/$metadata');
   const schedule = () => { clearInterval(state.timer); state.timer = setInterval(() => { if (!document.hidden) loadAll(); }, CFG.refreshMs || 60000); };
   document.addEventListener('visibilitychange', () => { if (!document.hidden) loadAll(); });
 
