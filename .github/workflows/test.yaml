@@ -1,0 +1,38 @@
+name: ASTRA Tests
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: astra-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [22.x, 24.x]
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+
+      - run: npm ci
+
+      # The source models are committed (pinned versions, see package.json ->
+      # sourceModels); the tests build their fake source databases from them
+      # in SQLite, so no ODATANO or NIGHTGATE instance is needed here.
+      - run: npm run typecheck
+      - run: npm test

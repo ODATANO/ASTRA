@@ -1,0 +1,26 @@
+@cds-models
+node_modules/
+dist/
+gen/
+.env
+.env.*
+!.env.example
+db.sqlite*
+sources/*.sqlite*
+
+# local
+*.log
+.DS_Store
+coverage/
+*.tgz
+.vscode/
+
+# private working notes, never published
+CLAUDE.md
+CONCEPT.md
+ARCHITECTURE.md
+*claude*
+local_docs/
+
+# local helpers (box deploy, og-image render); never published
+scripts/local/

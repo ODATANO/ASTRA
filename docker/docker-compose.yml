@@ -1,0 +1,66 @@
+# ODATANO ASTRA on the box – next to ODATANO (odatano-preprod / odatano-postgres)
+# and NIGHTGATE (nightgate-api / nightgate-postgres).
+#
+#   cd /root/odatano-astra && docker compose -f docker/docker-compose.yml --env-file .env up -d
+#
+# ASTRA has its own Postgres for aggregates and joins the two docker networks
+# the source Postgres containers live on, so it can read them by container name.
+# Nothing is published beyond loopback; ODATANO ACCESS (or Caddy) fronts it.
+name: odatano-astra
+
+services:
+  odatano-astra:
+    image: ghcr.io/odatano/astra:${ASTRA_IMAGE_TAG:-latest}
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: odatano-astra
+    restart: unless-stopped
+    env_file: ../.env
+    environment:
+      ASTRA_DB_URL: postgres://astra:${ASTRA_PG_PASSWORD}@astra-postgres:5432/astra
+    ports:
+      - "127.0.0.1:${ASTRA_PORT:-4017}:4004"
+    depends_on:
+      astra-postgres:
+        condition: service_healthy
+    networks:
+      - default
+      - cardano
+      - midnight
+    logging:
+      driver: json-file
+      options: { max-size: "20m", max-file: "5" }
+
+  astra-postgres:
+    image: postgres:16-alpine
+    container_name: astra-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: astra
+      POSTGRES_PASSWORD: ${ASTRA_PG_PASSWORD}
+      POSTGRES_DB: astra
+    volumes:
+      - astra-pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U astra -d astra"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    command: ["postgres", "-c", "shared_buffers=256MB", "-c", "max_wal_size=1GB"]
+    networks:
+      - default
+
+volumes:
+  astra-pg-data:
+
+networks:
+  default:
+  # The compose projects of ODATANO (/root/odatano) and NIGHTGATE (/root/nightgate-api)
+  # own these networks; override the names in .env if they differ on the box.
+  cardano:
+    external: true
+    name: ${ASTRA_CARDANO_NETWORK:-cardano-preprod_default}
+  midnight:
+    external: true
+    name: ${ASTRA_MIDNIGHT_NETWORK:-nightgate-deploy_default}

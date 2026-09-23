@@ -1,0 +1,46 @@
+chain;ID;name;kind;scope;unit;description
+cardano;blocks.count;Blocks;counter;chain;blocks;Number of blocks indexed in the bucket
+cardano;blocks.size;Block size;distribution;chain;bytes;Block size in bytes (one sample per block)
+cardano;blocks.interval;Block interval;distribution;chain;s;Seconds between consecutive blocks (one sample per block)
+cardano;blocks.empty;Empty blocks;counter;chain;blocks;Blocks without transactions
+cardano;blocks.txCount;Transactions per block;distribution;chain;tx;Transactions per block (one sample per block)
+cardano;tx.count;Transactions;counter;chain;tx;Number of transactions
+cardano;tx.withMetadata;Transactions with metadata;counter;chain;tx;Transactions carrying auxiliary metadata
+cardano;fees.paid;Fees;distribution;chain;lovelace;Fee per transaction in lovelace (sum = total fees)
+cardano;tokens.transfers;Token transfers;counter;both;moves;Native-asset movements (one per transaction and unit that produced output)
+cardano;tokens.mints;Token mints;counter;both;mints;Transactions that created supply of a unit (outputs minus inputs > 0)
+cardano;tokens.burns;Token burns;counter;both;burns;Transactions that destroyed supply of a unit (outputs minus inputs < 0)
+cardano;tx.withAssets;Transactions with native assets;counter;chain;tx;Transactions moving at least one native asset
+cardano;value.transferred;Value transferred;distribution;chain;ADA;ADA in created outputs (sum = volume moved); in ADA because lovelace squared overflows the sumSq column
+cardano;utxo.created;UTxOs created;counter;chain;utxo;Outputs created
+cardano;utxo.spent;UTxOs spent;counter;chain;utxo;Inputs consumed
+cardano;value.received;Value received;distribution;entity;ADA;ADA an address received (leaderboard dimension address/script)
+cardano;value.sent;Value sent;distribution;entity;ADA;ADA an address spent (leaderboard dimension address/script)
+cardano;blocks.produced;Blocks produced;counter;entity;blocks;Blocks by producer (leaderboard dimension producer)
+cardano;stake.live;Live stake;distribution;entity;ADA;Live stake per pool in the epoch snapshot (dimension pool)
+cardano;stake.active;Active stake;distribution;entity;ADA;Active stake per pool in the epoch snapshot (dimension pool)
+cardano;stake.blocksLifetime;Blocks minted;counter;entity;blocks;Blocks a pool has minted over its lifetime (dimension pool); the source reports no per-epoch figure
+cardano;stake.delegators;Delegators;counter;entity;delegators;Live delegators per pool (dimension pool)
+cardano;governance.votingPower;Voting power;distribution;entity;ADA;Voting power per DRep in the epoch snapshot (dimension drep)
+cardano;tokens.received;Token received;distribution;entity;units;Quantity of ONE token an address received (dimension tokenHolder, needs a subject); movement, not a balance
+cardano;tokens.sent;Token sent;distribution;entity;units;Quantity of ONE token an address spent (dimension tokenHolder, needs a subject); movement, not a balance
+cardano;stake.pools;Stake pools;gauge;chain;pools;Pools in the latest epoch snapshot
+cardano;stake.totalLive;Total live stake;gauge;chain;ADA;Live stake across all pools in the latest epoch snapshot
+cardano;governance.dreps;Active DReps;gauge;chain;dreps;DReps in the latest snapshot that are neither retired nor expired
+cardano;governance.totalPower;Total voting power;gauge;chain;ADA;Voting power across all DReps in the latest epoch snapshot
+midnight;blocks.count;Blocks;counter;chain;blocks;Number of blocks indexed in the bucket
+midnight;blocks.interval;Block interval;distribution;chain;s;Seconds between consecutive blocks (one sample per block)
+midnight;blocks.empty;Empty blocks;counter;chain;blocks;Blocks without transactions
+midnight;blocks.txCount;Transactions per block;distribution;chain;tx;Transactions per block (one sample per block)
+midnight;tx.count;Transactions;counter;chain;tx;Number of REGULAR transactions (system extrinsics excluded)
+midnight;tx.system;System extrinsics;counter;chain;tx;Substrate SYSTEM transactions (timestamp inherents etc.)
+midnight;tx.size;Transaction size;distribution;chain;bytes;Transaction size in bytes (one sample per transaction)
+midnight;tx.shielded;Shielded transactions;counter;chain;tx;Transactions flagged isShielded
+midnight;tx.withProof;Transactions with ZK proof;counter;chain;tx;Transactions flagged hasProof
+midnight;tx.contractCalls;Contract calls;counter;chain;tx;Transactions of type contract_call
+midnight;tx.contractDeploys;Contract deploys;counter;chain;tx;Transactions of type contract_deploy
+midnight;tx.failed;Failed transactions;counter;chain;tx;Transactions whose result status is FAILURE
+midnight;fees.paid;Fees paid;distribution;chain;specks;paidFees per transaction in specks, the DUST atom (1 DUST = 10^15 specks; sum = total fees)
+midnight;fees.estimated;Fees estimated;distribution;chain;specks;estimatedFees per transaction in specks (1 DUST = 10^15 specks)
+midnight;fees.estimateError;Fee estimate error;distribution;chain;specks;paidFees minus estimatedFees per transaction
+midnight;blocks.produced;Blocks produced;counter;entity;blocks;Blocks by author (leaderboard dimension producer); sum is the bytes produced

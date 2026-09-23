@@ -1,0 +1,101 @@
+{
+  "name": "@odatano/astra",
+  "version": "0.1.0",
+  "description": "ODATANO ASTRA: analytics for Cardano and Midnight, exposed as OData V4",
+  "license": "Apache-2.0",
+  "author": "Maximilian Weber",
+  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ODATANO/ASTRA.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ODATANO/ASTRA/issues"
+  },
+  "homepage": "https://github.com/ODATANO/ASTRA#readme",
+  "keywords": [
+    "cardano",
+    "midnight",
+    "analytics",
+    "odata",
+    "CAP",
+    "odatano"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "imports": {
+    "#cds-models/*": "./@cds-models/*/index.js"
+  },
+  "dependencies": {
+    "@cap-js/postgres": "^3",
+    "@cap-js/sqlite": "^3",
+    "@sap/cds": "^10"
+  },
+  "devDependencies": {
+    "@cap-js/cds-typer": ">=0.1",
+    "@cap-js/cds-types": "^0.18.0",
+    "@odatano/brand": "^1.3.0",
+    "@sap/cds-dk": "^10",
+    "@types/node": "^24.0.0",
+    "tsx": "^4",
+    "typescript": "^7.0.0",
+    "vitest": "^3"
+  },
+  "scripts": {
+    "start": "cds-tsx serve",
+    "watch": "cds-tsx watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "sources:sync": "node scripts/sync-source-models.mjs",
+    "sources:seed": "tsx scripts/seed-demo-sources.ts",
+    "sources:reset": "tsx scripts/seed-demo-sources.ts --reset",
+    "brand": "node -e \"const fs=require('fs');fs.mkdirSync('app/brand/logos',{recursive:true});for(const f of ['astra-logo.svg','astra-logo-on-dark.svg','astra-icon.svg','odatano-logo.svg','odatano-logo-on-dark.svg','odatano-icon.svg','odatano-icon-on-dark.svg'])fs.copyFileSync('node_modules/@odatano/brand/logos/'+f,'app/brand/logos/'+f);fs.copyFileSync('node_modules/@odatano/brand/tokens.css','app/brand/tokens.css')\""
+  },
+  "sourceModels": {
+    "@odatano/core": "2.0.0-rc.18",
+    "@odatano/nightgate": "0.25.4"
+  },
+  "cds": {
+    "requires": {
+      "db": {
+        "[development]": {
+          "kind": "sqlite",
+          "credentials": {
+            "url": "db.sqlite"
+          }
+        },
+        "[production]": {
+          "kind": "postgres"
+        }
+      }
+    },
+    "astra": {
+      "pollMs": 10000,
+      "chunkBlocks": 200,
+      "startTime": "2026-01-01T00:00:00Z",
+      "retention": {
+        "minuteHours": 48,
+        "hourDays": 90
+      },
+      "sources": {
+        "cardano": {
+          "[development]": {
+            "kind": "sqlite",
+            "credentials": {
+              "url": "sources/cardano.sqlite"
+            }
+          }
+        },
+        "midnight": {
+          "[development]": {
+            "kind": "sqlite",
+            "credentials": {
+              "url": "sources/midnight.sqlite"
+            }
+          }
+        }
+      }
+    }
+  }
+}

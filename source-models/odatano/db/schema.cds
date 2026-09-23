@@ -1,0 +1,1844 @@
+using {temporal, } from '@sap/cds/common';
+using {Lovelace, Blake2b224, Blake2b256, HexBytes, Bech32, AssetUnit, AssetSlice, SigningStatus,SubmissionStatus, UTxODataSlice, MetadataLabel, CrawlSyncStatus, ReorgStatus, WalletJobStatus, WalletJobKind, WorkerSignerType} from '../db/types';
+
+namespace odatano.cardano;
+
+@title      : 'Network Information Entity'
+@description: 'General information entity definition'
+entity NetworkInformation : temporal {
+
+        @title      : 'Network (key)'
+        @description: 'The Cardano network type mainnet | preprod | preview'
+    key network           : String(10);
+
+        @title      : 'Max Supply'
+        @description: 'The maximum supply of ADA'
+        maxSupply         : Lovelace;
+
+        @title      : 'Total Supply'
+        @description: 'Current total supply of ADA'
+        totalSupply       : Lovelace;
+
+        @title      : 'Circulating Supply'
+        @description: 'Current circulating supply of ADA'
+        circulatingSupply : Lovelace;
+
+        @title      : 'Locked Supply'
+        @description: 'Current locked supply of ADA'
+        lockedSupply      : Lovelace;
+
+        @title      : 'Treasury Supply'
+        @description: 'Current treasury supply of ADA'
+        treasurySupply    : Lovelace;
+
+        @title      : 'Reserves Supply'
+        @description: 'Current reserves supply of ADA'
+        reservesSupply    : Lovelace;
+
+        @title      : 'Live Stake'
+        @description: 'Current live stake of ADA'
+        liveStake         : Lovelace;
+
+        @title      : 'Active Stake'
+        @description: 'Current active stake of ADA'
+        activeStake       : Lovelace;
+}
+
+@title      : 'Block Entity'
+@description: 'Block information entity definition'
+@readonly
+entity Blocks {
+
+        @title      : 'Block Hash (Key)'
+        @description: 'Block hash as hex string'
+    key hash        : String(64);
+
+        @title      : 'Block Time'
+        @description: 'Block time as ISO 8601 string'
+        time        : String;
+
+        @title      : 'Block Height'
+        @description: 'Block height as integer'
+        height      : Integer;
+
+        @title      : 'Block SlotLeader'
+        @description: 'Slot leader id as hex string'
+        slotLeader  : String;
+
+        @title      : 'Block Epoch Number'
+        @description: 'Epoch number as integer'
+        epochNumber : Integer;
+
+        @title      : 'Block epoch Association'
+        @description: 'Association to Epochs entity'
+        epoch       : Association to Epochs
+                          on epoch.epoch = $self.epochNumber;
+
+        @title      : 'Block Absolute Slot'
+        @description: 'Absolute slot number of the block'
+        slot        : Integer64;
+
+        @title      : 'Block Slot within Epoch'
+        @description: 'Slot number within the epoch as integer'
+        epochSlot   : Integer;
+
+        @title      : 'Block Size'
+        @description: 'Block size in bytes'
+        size        : Integer;
+
+        @title      : 'Block Transaction Count'
+        @description: 'Number of transactions in the block'
+        txCount     : Integer;
+
+        @title      : 'Block Fees'
+        @description: 'Total fees in the block'
+        fees        : Lovelace;
+}
+
+@title      : 'Epoch Entity'
+@description: 'Epoch information entity definition'
+@readonly
+entity Epochs {
+
+        @title      : 'Epoch Number (Key)'
+        @description: 'Epoch number as integer'
+    key epoch         : Integer;
+
+        @title      : 'Epoch Start Time'
+        @description: 'Epoch start time as unix timestamp (seconds)'
+        startTime      : Integer64; // Integer (32-bit) overflows on 2038-01-19
+
+        @title      : 'Epoch End Time'
+        @description: 'Epoch end time as unix timestamp (seconds)'
+        endTime        : Integer64;
+
+        @title      : 'First Block Time'
+        @description: 'First block time as unix timestamp (seconds)'
+        firstBlockTime : Integer64;
+
+        @title      : 'Last Block Time'
+        @description: 'Last block time as unix timestamp (seconds)'
+        lastBlockTime  : Integer64;
+
+        @title      : 'Block Count'
+        @description: 'Number of blocks in the epoch'
+        blockCount     : Integer;
+
+        @title      : 'Transaction Count'
+        @description: 'Number of transactions in the epoch'
+        txCount        : Integer;
+
+        @title      : 'Total Output'
+        @description: 'Total output in the epoch as string to avoid precision issues'
+        output         : String;
+
+        @title      : 'Total Fees'
+        @description: 'Total fees in the epoch'
+        fees           : Lovelace;
+
+        @title      : 'Active Stake'
+        @description: 'Total active stake in the epoch'
+        activeStake    : Lovelace;
+}
+
+@title      : 'Pool Entity'
+@description: 'Stake pool information entity definition'
+entity Pools : temporal {
+
+        @title      : 'Pool Id (Key)'
+        @description: 'Unique stake pool identifier'
+    key poolId         : Bech32;
+
+        @title      : 'VRF Key Hash'
+        @description: 'Pool VRF key hash as hex string'
+        vrfKeyHash     : String;
+
+        @title      : 'Blocks Minted'
+        @description: 'Total number of blocks minted by the pool'
+        blocksMinted   : Integer;
+
+        @title      : 'Blocks in Epoch'
+        @description: 'Number of blocks minted in the current epoch. Null when the backend that filled the row has no such figure (Koios); a 0 is a real zero'
+        blocksEpoch    : Integer;
+
+        @title      : 'Live Stake'
+        @description: 'Current live stake delegated to the pool'
+        liveStake      : Lovelace;
+
+        @title      : 'Live Size'
+        @description: 'Current live size as fraction of total active stake'
+        liveSize       : Decimal(5, 4);
+
+        @title      : 'Live Saturation'
+        @description: 'Current live saturation as fraction of ideal size (1.0 = 100% saturated). Decimal(9, 4): a test-network pool can hold many times the saturation point'
+        liveSaturation : Decimal(9, 4);
+
+        @title      : 'Live Delegators'
+        @description: 'Current number of live delegators'
+        liveDelegators : Integer;
+
+        @title      : 'Active Stake'
+        @description: 'Current active stake delegated to the pool'
+        activeStake    : Lovelace;
+
+        @title      : 'Active Size'
+        @description: 'Current active size as fraction'
+        activeSize     : Decimal(5, 4);
+
+        @title      : 'Pledge'
+        @description: 'Pool pledge in lovelace'
+        pledge         : Lovelace;
+
+        @title      : 'Margin'
+        @description: 'Pool margin as fraction'
+        margin         : Decimal(5, 4);
+
+        @title      : 'Fixed Cost'
+        @description: 'Pool fixed cost in lovelace'
+        fixedCost      : Lovelace;
+
+        @title      : 'Reward Account'
+        @description: 'Pool reward account in bech32 format'
+        rewardAccount  : String;
+}
+
+@title      : 'Pool Epoch Snapshot Entity'
+@description: 'Stake-pool state as observed once per epoch by the chain crawler. Non-temporal: each row is a dated observation, not a cached slice, so the crawled range is a true time series. Written only when the crawler runs with epochSnapshots enabled, an enumerating backend (Koios) is configured, and the crawl is at the chain tip — the provider reports the pool set as it is now, so an epoch passed during a backfill is skipped rather than filled with current figures.'
+entity PoolEpochSnapshots {
+
+        @title      : 'Pool Id (Key)'
+        @description: 'Unique stake pool identifier'
+    key poolId         : Bech32;
+
+        @title      : 'Epoch (Key)'
+        @description: 'Epoch the observation belongs to — the epoch running at snapshotSlot'
+    key epoch          : Integer;
+
+        @title      : 'Snapshot Slot'
+        @description: 'Absolute slot of the block that triggered the snapshot'
+        snapshotSlot   : Integer64;
+
+        @title      : 'Snapshot Time'
+        @description: 'Unix timestamp of the block that triggered the snapshot'
+        snapshotTime   : Integer64;
+
+        @title      : 'Blocks Minted'
+        @description: 'Total number of blocks minted by the pool'
+        blocksMinted   : Integer;
+
+        @title      : 'Blocks in Epoch'
+        @description: 'Number of blocks minted in the epoch that was running at snapshot time. Null when the enumerating backend has no such figure (Koios); a 0 is a real zero'
+        blocksEpoch    : Integer;
+
+        @title      : 'Live Stake'
+        @description: 'Live stake delegated to the pool'
+        liveStake      : Lovelace;
+
+        @title      : 'Live Size'
+        @description: 'Live size as fraction of total active stake'
+        liveSize       : Decimal(5, 4);
+
+        @title      : 'Live Saturation'
+        @description: 'Live saturation as fraction of ideal size (1.0 = 100% saturated). Decimal(9, 4): a test-network pool can hold many times the saturation point'
+        liveSaturation : Decimal(9, 4);
+
+        @title      : 'Live Delegators'
+        @description: 'Number of live delegators'
+        liveDelegators : Integer;
+
+        @title      : 'Active Stake'
+        @description: 'Active stake delegated to the pool'
+        activeStake    : Lovelace;
+
+        @title      : 'Active Size'
+        @description: 'Active size as fraction'
+        activeSize     : Decimal(5, 4);
+
+        @title      : 'Pledge'
+        @description: 'Pool pledge in lovelace'
+        pledge         : Lovelace;
+
+        @title      : 'Margin'
+        @description: 'Pool margin as fraction'
+        margin         : Decimal(5, 4);
+
+        @title      : 'Fixed Cost'
+        @description: 'Pool fixed cost in lovelace'
+        fixedCost      : Lovelace;
+}
+
+@title      : 'Drep Epoch Snapshot Entity'
+@description: 'DRep state as observed once per epoch by the chain crawler. Non-temporal, tip-only, same reasoning as PoolEpochSnapshots.'
+entity DrepEpochSnapshots {
+
+        @title      : 'Drep Id (Key)'
+        @description: 'Unique drep identifier'
+    key drepId          : Bech32;
+
+        @title      : 'Epoch (Key)'
+        @description: 'Epoch the observation belongs to — the epoch running at snapshotSlot'
+    key epoch           : Integer;
+
+        @title      : 'Snapshot Slot'
+        @description: 'Absolute slot of the block that triggered the snapshot'
+        snapshotSlot    : Integer64;
+
+        @title      : 'Snapshot Time'
+        @description: 'Unix timestamp of the block that triggered the snapshot'
+        snapshotTime    : Integer64;
+
+        @title      : 'Vote Power'
+        @description: 'Amount of vote power in lovelace'
+        amount          : Lovelace;
+
+        @title      : 'Has Script'
+        @description: 'Indicates if drep is a script drep'
+        hasScript       : Boolean;
+
+        @title      : 'Last Active Epoch'
+        @description: 'Epoch number of last activity'
+        lastActiveEpoch : Integer;
+
+        @title      : 'Retired'
+        @description: 'Indicates if drep is retired'
+        retired         : Boolean;
+
+        @title      : 'Expired'
+        @description: 'Indicates if drep is expired'
+        expired         : Boolean;
+}
+
+@title      : 'Asset Entity'
+@description: 'Native-asset information entity (supply, mint history, CIP-25 + CIP-26 metadata)'
+entity Assets : temporal {
+
+        @title      : 'Asset Unit (Key)'
+        @description: 'Concatenation of policyId (56 hex) and assetNameHex (0-64 hex, the 32-byte ledger cap)'
+    key unit              : AssetUnit;
+
+        @title      : 'Policy ID'
+        @description: 'Blake2b-224 hash of the minting policy script (56-char hex)'
+        policyId          : Blake2b224;
+
+        @title      : 'Asset Name Hex'
+        @description: 'Asset name as hex string (0-32 bytes / 0-64 hex chars)'
+        assetNameHex      : String(64); // 32-byte ledger cap = 64 hex (was HexBytes=String(5000))
+
+        @title      : 'Asset Name'
+        @description: 'Asset name as UTF-8 string when decodable'
+        assetName         : String(128);
+
+        @title      : 'Asset Fingerprint'
+        @description: 'CIP-14 asset fingerprint (asset1...)'
+        fingerprint       : String(44);
+
+        @title      : 'Total Supply'
+        @description: 'Current total supply (BigInt-safe decimal string)'
+        totalSupply       : String(40);
+
+        @title      : 'Mint or Burn Count'
+        @description: 'Total number of mint/burn transactions for this asset'
+        mintOrBurnCount   : Integer;
+
+        @title      : 'Initial Mint Tx Hash'
+        @description: 'Hash of the transaction that first minted this asset'
+        initialMintTxHash : Blake2b256;
+
+        @title      : 'Initial Mint Time'
+        @description: 'Unix timestamp of the initial mint (null when unavailable from backend, e.g. Blockfrost)'
+        initialMintTime   : Integer64;
+
+        @title      : 'On-Chain Metadata'
+        @description: 'CIP-25 on-chain metadata as JSON string (varies per minter)'
+        onchainMetadata   : LargeString;
+
+        @title      : 'Registry Name'
+        @description: 'CIP-26 off-chain registry: human-readable name'
+        registryName      : String(128);
+
+        @title      : 'Registry Ticker'
+        @description: 'CIP-26 off-chain registry: ticker symbol'
+        registryTicker    : String(16);
+
+        @title      : 'Registry Decimals'
+        @description: 'CIP-26 off-chain registry: decimal precision'
+        registryDecimals  : Integer;
+
+        @title      : 'Registry Description'
+        @description: 'CIP-26 off-chain registry: human-readable description'
+        registryDescription : LargeString;
+
+        @title      : 'Registry URL'
+        @description: 'CIP-26 off-chain registry: project URL'
+        registryUrl       : String(256);
+
+        @title      : 'Registry Logo'
+        @description: 'CIP-26 off-chain registry: base64-encoded logo or URL'
+        registryLogo      : LargeString;
+}
+
+@title      : 'Asset History Entry'
+@description: 'Mint or burn event for a native asset. Immutable on-chain — entries are never updated, only inserted. Free-standing (not a Composition) so history can be queried before/without the parent Assets row.'
+@readonly
+entity AssetHistory {
+
+        @title      : 'Asset Unit (Key)'
+        @description: 'policyId + assetNameHex (concatenated hex)'
+    key unit        : AssetUnit;
+
+        @title      : 'Transaction Hash (Key)'
+        @description: 'Hash of the transaction that performed the mint or burn'
+    key txHash      : Blake2b256;
+
+        @title      : 'Action'
+        @description: 'mint or burn'
+        action      : String(10);
+
+        @title      : 'Quantity'
+        @description: 'Absolute mint/burn amount (BigInt-safe decimal string; always positive — sign info is in `action`)'
+        quantity    : String(40);
+
+        @title      : 'Block Time'
+        @description: 'Unix timestamp of the containing block (null when backend does not provide, e.g. Blockfrost without extra tx fetch)'
+        blockTime   : Integer64;
+
+        @title      : 'Block Height'
+        @description: 'Block height of the containing block (null when backend does not provide)'
+        blockHeight : Integer;
+}
+
+@title      : 'Drep Entity'
+@description: 'Drep information entity definition'
+entity Dreps : temporal {
+
+        @title      : 'Drep Id (Key)'
+        @description: 'Unique drep identifier'
+    key drepId          : Bech32;
+
+        @title      : 'Drep VRF Key Hash'
+        @description: 'Drep VRF key hash as hex string'
+        hex             : String;
+
+        @title      : 'Vote Power'
+        @description: 'Amount of vote power in lovelace'
+        amount          : Lovelace;
+
+        @title      : 'Has Script'
+        @description: 'Indicates if drep is a script drep'
+        hasScript       : Boolean;
+
+        @title      : 'Last Active Epoch'
+        @description: 'Epoch number of last activity'
+        lastActiveEpoch : Integer;
+
+        @title      : 'Retired'
+        @description: 'Indicates if drep is retired'
+        retired         : Boolean;
+
+        @title      : 'Expired'
+        @description: 'Indicates if drep is expired'
+        expired         : Boolean;
+}
+
+@title      : 'Address Entity'
+@description: 'Address information entity definition'
+entity Addresses : temporal {
+
+        @title      : 'Bech32 Address (Key)'
+        @description: 'The Bech32 encoded address string'
+    key address       : Bech32;
+
+        @title      : 'Associated Stake Address'
+        @description: 'The associated stake address in bech32 format'
+        stakeAddress  : Bech32;
+
+        @title      : 'Address Type'
+        @description: 'The type of address (base | enterprise | pointer | reward | script | unknown)'
+        type          : String(20);
+
+        @title      : 'Is Script Address'
+        @description: 'Indicates if the address is a script address'
+        isScript      : Boolean;
+
+        @title      : 'Total Lovelace'
+        @description: 'Total lovelace on this address'
+        totalLovelace : Lovelace;
+
+        @title      : 'UTxO Count'
+        @description: 'Number of UTxOs at this address (pre-aggregated, no UTxO scan needed for status checks)'
+        utxoCount     : Integer;
+
+        @title : 'Address Transactions'
+        @description : 'Composition of all transactions involving this address'
+        transactions : Composition of many AddressTransactions
+                            on transactions.address = $self;
+
+        @title      : 'Address Assets'
+        @description: 'Composition of all assets on this address'
+        assets        : Composition of many AddressAssets
+                            on assets.address = $self;
+
+        @title      : 'Address UTxOs'
+        @description: 'Composition of all UTxOs on this address'
+        utxos         : Composition of many AddressUTxOs
+                            on utxos.address = $self;
+
+        @title : 'Address Has Transactions'
+        @description : 'Indicates if address has transactions'
+        hasTransactions : Boolean;
+
+        @title      : 'Address Has Assets'
+        @description: 'Indicates if address has native assets'
+        hasAssets     : Boolean;
+
+        @title      : 'Address Has UTxOs'
+        @description: 'Indicates if address has UTxOs'
+        hasUTxOs      : Boolean;
+
+
+}
+
+@title      : 'Address Assets'
+@description: 'Association entity for assets held by an address'
+entity AddressAssets : temporal {
+
+        @title      : 'Address (key)'
+        @description: 'The Bech32 encoded address associated with the asset'
+    key address : Association to Addresses;
+
+        @title      : 'Asset Unit (key)'
+        @description: 'The unique identifier for the asset unit'
+    key unit    : AssetUnit;
+
+        @title      : 'Asset Details'
+        @description: 'Structural slice for asset details'
+        asset   : AssetSlice;
+}
+
+@title      : 'Address UTxOs'
+@description: 'Association entity for UTxOs held by an address'
+entity AddressUTxOs : temporal {
+
+        @title      : 'Address (key)'
+        @description: 'The Bech32 encoded address associated with the UTxO'
+    key address   : Association to Addresses;
+
+        @title      : 'UTxO Key (key)'
+        @description: 'The unique identifier for the UTxO (tx hash + index)'
+    key hash      : Blake2b256;
+
+        @title      : 'UTxO Index (key)'
+        @description: 'The output index of the UTxO'
+    key index     : Integer;
+
+        @title      : 'Block Hash'
+        @description: 'Block hash containing the UTxO'
+        blockHash : Blake2b256;
+
+        @title      : 'UTxO Data'
+        @description: 'UTxO specific data'
+        utxodata  : UTxODataSlice;
+
+        @title      : 'Lovelace Amount'
+        @description: 'Lovelace amount in the UTxO'
+        lovelace  : Lovelace;
+
+        @title      : 'UTxO Assets'
+        @description: 'Assets in this UTxO'
+        assets    : Composition of many UTxOAssets
+                        on assets.utxo = $self;
+
+        @title      : 'UTxO Has Assets'
+        @description: 'Indicates if utxo has assets'
+        hasAssets : Boolean;
+}
+
+@title      : 'UTxO Assets'
+@description: 'Association entity for assets held by a UTxO'
+entity UTxOAssets : temporal {
+
+        @title: 'UTxO (key)'
+    key utxo  : Association to AddressUTxOs; // utxo association
+
+        @title      : 'Asset Unit (key)'
+        @description: 'The unique identifier for the asset unit'
+    key unit  : AssetUnit; // asset unit - must be key since one UTxO can hold multiple assets
+
+        @title      : 'Asset Details'
+        @description: 'Structural slice for asset details'
+        asset : AssetSlice; // asset details
+}
+
+@title      : 'Accounts Entity'
+@description: 'Account information entity definition'
+entity Accounts : temporal {
+
+        @title      : 'Stake Address (Key)'
+        @description: 'The Bech32 encoded stake address string'
+    key stakeAddress       : Bech32;
+
+        @title      : 'Active Status'
+        @description: 'Indicates if the account is active'
+        active             : Boolean;
+
+        @title      : 'Last Active Epoch'
+        @description: 'Epoch number of last activity'
+        activeEpoch        : Integer;
+
+        @title      : 'Controlled Amount'
+        @description: 'Total controlled amount in lovelace'
+        controlledAmount   : Lovelace;
+
+        @title      : 'Rewards Sum'
+        @description: 'Total rewards sum in lovelace'
+        rewardsSum         : Lovelace;
+
+        @title      : 'Withdrawals Sum'
+        @description: 'Total withdrawals sum in lovelace'
+        withdrawalsSum     : Lovelace;
+
+        @title      : 'Reserves Sum'
+        @description: 'Total reserves sum in lovelace'
+        reservesSum        : Lovelace;
+
+        @title      : 'Treasury Sum'
+        @description: 'Total treasury sum in lovelace'
+        treasurySum        : Lovelace;
+
+        @title      : 'Withdrawable Amount'
+        @description: 'Total withdrawable amount in lovelace'
+        withdrawableAmount : Lovelace;
+
+        @title      : 'Pool ID'
+        @description: 'Associated pool ID'
+        poolId             : Association to Pools;
+
+        @title      : 'DRep ID'
+        @description: 'Associated DRep ID'
+        drepId             : Association to Dreps;
+
+        @title      : 'Addresses'
+        @description: 'All addresses for this account'
+        Address            : Composition of many Addresses
+                                 on Address.stakeAddress = $self.stakeAddress;
+
+        @title      : 'Has Addresses'
+        @description: 'Indicates if account has associated addresses'
+        hasAddresses       : Boolean;
+}
+
+@title      : 'Transaction Entity'
+@description: 'Transaction information entity definition'
+@readonly
+entity Transactions {
+
+        @title      : 'Transaction Hash (Key)'
+        @description: 'The unique transaction identifier as hex string'
+    key hash        : Blake2b256;
+
+        @title      : 'Transaction  Block Hash'
+        @description: 'The block hash containing the transaction'
+        blockHash   : Blake2b256;
+
+        @title      : 'Transaction  Block Height'
+        @description: 'The block height containing the transaction'
+        blockHeight : Integer;
+
+        @title      : 'Transaction  Block Time'
+        @description: 'The block time as integer unix timestamp'
+        blockTime   : Integer64;
+
+        @title      : 'Transaction Slot'
+        @description: 'The slot number containing the transaction'
+        slot        : Integer64;
+
+        @title      : 'Transaction Index'
+        @description: 'The transaction index within the block'
+        txIndex     : Integer;
+
+        @title      : 'Transaction Fee'
+        @description: 'The transaction fee in lovelace'
+        fee         : Lovelace;
+
+        @title      : 'Transaction Deposit'
+        @description: 'The deposit change in lovelace'
+        deposit     : Lovelace;
+
+        @title      : 'Transaction Size'
+        @description: 'The transaction size in bytes'
+        size        : Integer;
+
+        @title      : 'Transaction Metadata'
+        @description: 'The transaction metadata'
+        metadata    : Composition of many TransactionMetadata
+                          on metadata.tx = $self;
+
+        @title      : 'Transaction Inputs'
+        @description: 'The transaction inputs composition'
+        inputs      : Composition of many TransactionInputs
+                          on inputs.tx = $self;
+
+        @title      : 'Transaction Outputs'
+        @description: 'The transaction outputs composition'
+        outputs     : Composition of many TransactionOutputs
+                          on outputs.tx = $self;
+
+        @title      : 'Transaction Has Metadata'
+        @description: 'Indicates if transaction has metadata'
+        hasMetadata : Boolean;
+
+        @title      : 'Transaction Has Inputs'
+        @description: 'Indicates if transaction has inputs'
+        hasInputs   : Boolean;
+
+        @title      : 'Transaction Has Outputs'
+        @description: 'Indicates if transaction has outputs'
+        hasOutputs  : Boolean;
+}
+
+@title      : 'Transaction Inputs'
+@description: 'Projection for Transaction Inputs'
+@readonly
+entity TransactionInputs {
+
+        @title      : 'Transaction (key)'
+        @description: 'The associated transaction'
+    key tx           : Association to Transactions;
+
+        @title      : 'Input Index (key)'
+        @description: 'The input index of the input utxo'
+    key inputIndex   : Integer;
+
+        @title      : 'Input Address'
+        @description: 'The associated address of the input utxo'
+        address      : Association to Addresses;
+
+        @title      : 'Input UTxO Data'
+        @description: 'The UTxO specific data of the input utxo'
+        utxoData     : UTxODataSlice; // input utxo data
+
+        @title      : 'Input Lovelace Amount'
+        @description: 'The lovelace amount of the input utxo'
+        isCollateral : Boolean;
+
+        @title      : 'Is Reference Input'
+        @description: 'Indicates if the input is used as reference input'
+        isReference  : Boolean;
+
+        @title      : 'Input Assets'
+        @description: 'Composed assets associated with the input utxo'
+        assets       : Composition of many TransactionInputAssets
+                           on assets.input = $self;
+
+        @title      : 'Input Has Addresses'
+        @description: 'Indicates if input has associated addresses'
+        hasAddresses : Boolean;
+
+        @title      : 'Input Has Assets'
+        @description: 'Indicates if input has assets'
+        hasAssets    : Boolean;
+}
+
+@title      : 'Transaction Input Assets'
+@description: 'Projection for Transaction Input Assets'
+@readonly
+entity TransactionInputAssets {
+
+        @title      : 'Transaction Input (key)'
+        @description: 'The associated transaction input'
+    key input : Association to TransactionInputs;
+
+        @title      : 'Asset Unit (key)'
+        @description: 'The asset unit'
+    key unit  : AssetUnit;
+
+        @title      : 'Asset Details'
+        @description: 'Structural slice for asset details'
+        asset : AssetSlice;
+}
+
+@title      : 'Transaction Outputs'
+@description: 'Projection for Transaction Outputs'
+@readonly
+entity TransactionOutputs {
+
+        @title      : 'Transaction (key)'
+        @description: 'The associated transaction'
+    key tx           : Association to Transactions;
+
+        @title      : 'Output Index (key)'
+        @description: 'The output index of the output utxo'
+    key outputIndex  : Integer;
+
+        @title      : 'Output Address'
+        @description: 'The associated address of the output utxo'
+        address      : Association to Addresses;
+
+        @title      : 'UTxO Data'
+        @description: 'The UTxO specific data of the output utxo'
+        utxo         : UTxODataSlice;
+
+        @title      : 'Transaction Output Assets'
+        @description: 'Composed assets associated with the output utxo'
+        assets       : Composition of many TransactionOutputAssets
+                           on assets.output = $self;
+
+        @title      : 'Has Addresses'
+        @description: 'Indicates if output has associated addresses'
+        hasAddresses : Boolean;
+
+        @title      : 'Has Assets'
+        @description: 'Indicates if output has assets'
+        hasAssets    : Boolean;
+}
+
+@title      : 'Transaction Output Assets'
+@description: 'Projection for Transaction Output Assets'
+@readonly
+entity TransactionOutputAssets {
+
+        @title      : 'Transaction Output (key)'
+        @description: 'The associated transaction output'
+    key output : Association to TransactionOutputs;
+
+        @title      : 'Asset Unit (key)'
+        @description: 'The asset unit'
+    key unit   : AssetUnit;
+
+        @title      : 'Asset Details'
+        @description: 'Structural slice for asset details'
+        asset  : AssetSlice;
+}
+
+@title      : 'Transaction Metadata'
+@description: 'Projection for Transaction Metadata'
+@readonly
+entity TransactionMetadata {
+
+        @title      : 'ID (key)'
+        @description: 'The metadata label as a uint64 (also exposed as the string `label`)'
+    key id      : Integer64; // was Integer (32-bit): overflowed for labels > 2^31
+
+        @title      : 'Transaction (key)'
+        @description: 'The associated transaction'
+    key tx      : Association to Transactions;
+
+        @title      : 'Label'
+        @description: 'The metadata label as string'
+        label   : MetadataLabel;
+
+        @title      : 'Metadata Payload'
+        @description: 'The metadata payload as JSON string'
+        payload : LargeString;
+}
+
+//-----------------------------------------------------
+// M2 - transaction building and submission entities
+//-----------------------------------------------------
+@title      : 'Ledger Protocol Parameters'
+@description: 'Entity for storing ledger protocol parameters for transaction building'
+entity LedgerProtocolParameters {
+
+        @title      : 'Network (key)'
+        @description: 'The Cardano network type mainnet | preprod | preview'
+    key network               : String(16);
+
+        @title      : 'Epoch Number (key)'
+        @description: 'The epoch number these parameters are valid for'
+    key epoch                 : Integer;
+
+        @title      : 'Minimum Fee A'
+        @description: 'The minimum fee factor a for transaction fee calculation'
+        minFeeA               : Integer;
+
+        @title      : 'Minimum Fee B'
+        @description: 'The minimum fee constant b for transaction fee calculation'
+        minFeeB               : Integer;
+
+        @title      : 'Maximum Sizes'
+        @description: 'Maximum sizes for blocks and transactions'
+        maxBlockSize          : Integer;
+
+        @title      : 'Maximum Transaction Size'
+        @description: 'The maximum size for a transaction in bytes'
+        maxTxSize             : Integer;
+
+        @title      : 'Maximum Block Header Size'
+        @description: 'The maximum size for a block header in bytes'
+        maxBlockHeaderSize    : Integer;
+
+        @title      : 'Key Deposit'
+        @description: 'The key deposit amount in lovelace'
+        keyDeposit            : String(32);
+
+        @title      : 'Pool Deposit'
+        @description: 'The pool deposit amount in lovelace'
+        poolDeposit           : String(32);
+
+        @title      : 'Epochs for Pool Retirement'
+        @description: 'The number of epochs before a retiring pool is removed from the ledger'
+        eMax                  : Integer;
+
+        @title      : 'nOpt Parameter'
+        @description: 'Stake pool target number parameter nOpt'
+        nOpt                  : Integer;
+
+        @title      : 'a0 Parameter'
+        @description: 'Pool pledge influence parameter a0'
+        a0                    : Decimal(18, 10);
+
+        @title      : 'Rho Parameter'
+        @description: 'Monetary expansion parameter rho'
+        rho                   : Decimal(18, 10);
+
+        @title      : 'Tau Parameter'
+        @description: 'Treasury cut parameter tau'
+        tau                   : Decimal(18, 10);
+
+        @title      : 'Minimum Pool Cost'
+        @description: 'The minimum pool cost in lovelace'
+        minPoolCost           : String(32);
+
+        @title      : 'Decentralisation Parameter'
+        @description: 'The decentralisation parameter of the network'
+        decentralisationParam : Decimal(18, 10);
+
+        @title      : 'Extra Entropy'
+        @description: 'The extra entropy for pool key generation'
+        extraEntropy          : String(128);
+
+        @title      : 'Protocol Major Version'
+        @description: 'The major version of the protocol'
+        protocolMajorVer      : Integer;
+
+        @title      : 'Protocol Minor Version'
+        @description: 'The minor version of the protocol'
+        protocolMinorVer      : Integer;
+
+        @title      : 'Min UTxO Value'
+        @description: 'The minimum UTxO value in lovelace'
+        minUtxo               : String(32);
+
+        @title      : 'Min Pool Cost'
+        @description: 'The minimum pool cost in lovelace'
+        nonce                 : String(128);
+
+        @title      : 'Cost Models'
+        @description: 'The cost models for script execution as JSON blob'
+        costModels            : LargeString;
+
+        @title      : 'Execution Prices'
+        @description: 'The execution prices for script execution'
+        priceMem              : Decimal(18, 10);
+
+        @title      : 'Execution Steps Price'
+        @description: 'The execution steps price for script execution'
+        priceStep             : Decimal(18, 10);
+
+        @title      : 'Maximum Execution Units'
+        @description: 'The maximum execution units for transactions and blocks'
+        maxTxExMem            : String(32);
+
+        @title      : 'Maximum Execution Steps'
+        @description: 'The maximum execution steps for transactions and blocks'
+        maxTxExSteps          : String(32);
+
+        @title      : 'Maximum Block Execution Units'
+        @description: 'The maximum execution units for blocks'
+        maxBlockExMem         : String(32);
+
+        @title      : 'Maximum Block Execution Steps'
+        @description: 'The maximum execution steps for blocks'
+        maxBlockExSteps       : String(32);
+
+        @title      : 'Maximum Value Size'
+        @description: 'The maximum size for a value in bytes'
+        maxValSize            : String(32);
+
+        @title      : 'Collateral Percent'
+        @description: 'The required collateral percentage for script transactions'
+        collateralPercent     : Integer;
+
+        @title      : 'Maximum Collateral Inputs'
+        @description: 'The maximum number of collateral inputs for script transactions'
+        maxCollateralInputs   : Integer;
+
+        @title      : 'Coins Per UTxO Size'
+        @description: 'The coins per UTxO size parameter for calculating min UTxO value'
+        coinsPerUtxoSize      : String(32);
+
+        @title      : 'Coins Per UTxO Word'
+        @description: 'The coins per UTxO word parameter for calculating min UTxO value (alonzo legacy)'
+        coinsPerUtxoWord      : String(32);
+
+        @title      : 'Fetched At'
+        @description: 'Timestamp when these parameters were fetched'
+        fetchedAt             : Timestamp;
+
+        @title      : 'Source'
+        @description: 'Source from which these parameters were fetched'
+        source                : String(32);
+}
+
+@title      : 'Transaction Builds'
+@description: 'Entity for storing transaction build attempts and details'
+entity TransactionBuilds : temporal {
+
+        @title      : 'Build ID (key)'
+        @description: 'Unique identifier for the transaction build attempt'
+    key id             : UUID;
+
+        @title      : 'Network'
+        @description: 'The Cardano network type mainnet | preprod | preview'
+        network        : String(10);
+
+        @title      : 'Builder Engine'
+        @description: 'The transaction builder engine used for this build'
+        builderEngine  : String(20);
+
+        @title      : 'Sender Address'
+        @description: 'The sender/source address'
+        senderAddress  : Bech32;
+
+        @title      : 'Change Address'
+        @description: 'The change address (defaults to sender address if not specified)'
+        changeAddress  : Bech32;
+
+        @title      : 'Unsigned Tx CBOR'
+        @description: 'The unsigned transaction CBOR as hex string'
+        unsignedTxCbor : LargeString;
+
+        @title      : 'Tx Body Hash'
+        @description: 'The transaction body hash as hex string'
+        txBodyHash     : Blake2b256;
+
+        @title      : 'Estimated Fee'
+        @description: 'The estimated transaction fee in lovelace'
+        fee            : Lovelace;
+
+        @title      : 'Transaction Size'
+        @description: 'The transaction size in bytes'
+        size           : Integer;
+
+        @title      : 'Build Created At'
+        @description: 'The timestamp when the build was created'
+        createdAt      : Integer64;
+
+        @title      : 'Build Inputs'
+        @description: 'The inputs used in the transaction build'
+        inputs         : Composition of many TransactionBuildInputs
+                             on inputs.build = $self;
+
+        @title      : 'Build Outputs'
+        @description: 'The outputs created in the transaction build'
+        outputs        : Composition of many TransactionBuildOutputs
+                             on outputs.build = $self;
+
+        @title      : 'Associated Submission'
+        @description: 'Association to the transaction submission if submitted'
+        submission     : Association to one TransactionSubmissions
+                             on submission.build = $self;
+
+        @title      : 'Has Inputs'
+        @description: 'Indicates if the build has inputs'
+        hasInputs      : Boolean;
+
+        @title      : 'Has Outputs'
+        @description: 'Indicates if the build has outputs'
+        hasOutputs     : Boolean;
+
+        @title      : 'Was Submitted'
+        @description: 'Indicates if the build was submitted'
+        wasSubmitted   : Boolean;
+
+        @title      : 'Script Hash'
+        @description: 'Blake2b-224 hash of the Plutus script used (= policy ID for minting transactions)'
+        scriptHash     : String(56);
+
+        @title      : 'Mint Script Hash'
+        @description: 'Blake2b-224 hash of the minting policy script (= policy ID) for combined spend+mint transactions. Only set when BuildPlutusSpendTransaction included mintActionsJson.'
+        mintScriptHash : String(56);
+
+        @title      : 'Asset Fingerprint'
+        @description: 'CIP-14 fingerprint of the first minted asset (e.g. asset1...). Convenience field for single-asset mints.'
+        fingerprint    : String(44);
+
+        @title      : 'Script Address'
+        @description: 'Enterprise script address derived from the applied script hash (bech32). Only set when lockOnScript=true.'
+        scriptAddress  : String(120);
+
+        @title      : 'Forced Inputs Used'
+        @description: 'Number of forced inputs (from forceInputsJson) actually included in the built transaction. 0 when forceInputsJson was not provided.'
+        forcedInputsUsed : Integer;
+
+        @title      : 'Reference Inputs Used'
+        @description: 'Number of CIP-31 reference inputs (from referenceInputsJson) included in the built transaction. 0 when referenceInputsJson was not provided.'
+        referenceInputsUsed : Integer;
+
+        @title      : 'Collateral Available'
+        @description: 'Indicates if collateral UTxOs were already available (SetCollateral only). When true, no transaction build was needed.'
+        collateralAvailable : Boolean;
+}
+
+@title      : 'Transaction Build Inputs'
+@description: 'Entity for storing transaction build input details'
+entity TransactionBuildInputs {
+
+        @title      : 'Build (key)'
+        @description: 'Association to parent transaction build'
+    key build       : Association to TransactionBuilds;
+
+        @title      : 'Input Index (key)'
+        @description: 'Index of the input in the transaction build'
+    key inputIndex  : Integer;
+
+        @title      : 'UTxO Transaction Hash'
+        @description: 'UTxO transaction hash'
+        txHash      : Blake2b256;
+
+        @title      : 'UTxO Output Index'
+        @description: 'UTxO output index'
+        outputIndex : Integer;
+
+        @title      : 'Input Address'
+        @description: 'UTxO address'
+        address     : Bech32;
+
+        @title      : 'Input Lovelace Amount'
+        @description: 'Lovelace amount of the input UTxO'
+        lovelace    : Lovelace;
+
+        @title      : 'Input Assets'
+        @description: 'Assets associated with the input UTxO'
+        assets      : Composition of many TransactionBuildInputAssets
+                          on assets.input = $self;
+
+        @title      : 'Input Has Assets'
+        @description: 'Indicates if input has native assets'
+        hasAssets   : Boolean;
+}
+
+@title      : 'Transaction Build Input Assets'
+@description: 'Entity for storing assets associated with transaction build inputs'
+entity TransactionBuildInputAssets {
+
+        @title      : 'Transaction Build Input (key)'
+        @description: 'Build input association'
+    key input : Association to TransactionBuildInputs;
+
+        @title      : 'Asset Unit (key)'
+        @description: 'Asset unit (policyId + assetNameHex)'
+    key unit  : AssetUnit;
+
+        @title      : 'Asset Details'
+        @description: 'Structural slice for asset details'
+        asset : AssetSlice;
+}
+
+@title      : 'Transaction Build Outputs'
+@description: 'Entity for storing transaction build output details'
+entity TransactionBuildOutputs {
+
+        @title      : 'Build (key)'
+        @description: 'Association to parent transaction build'
+    key build       : Association to TransactionBuilds;
+
+        @title      : 'Output Index (key)'
+        @description: 'Index in outputs array'
+    key outputIndex : Integer;
+
+        @title      : 'Recipient Address'
+        @description: 'Recipient address in bech32 format'
+        address     : Bech32;
+
+        @title      : 'Lovelace Amount'
+        @description: 'Lovelace amount to send'
+        lovelace    : Lovelace;
+
+        @title      : 'Is Change Output'
+        @description: 'Indicates if this is the change output'
+        isChange    : Boolean;
+
+        @title      : 'Output Assets'
+        @description: 'Assets associated with this output'
+        assets      : Composition of many TransactionBuildOutputAssets
+                          on assets.output = $self;
+
+        @title      : 'Has Assets'
+        @description: 'Indicates if output has native assets'
+        hasAssets   : Boolean;
+}
+
+@title      : 'Transaction Build Output Assets'
+@description: 'Entity for storing assets associated with transaction build outputs'
+entity TransactionBuildOutputAssets {
+
+        @title      : 'Transaction Build Output (key)'
+        @description: 'Association to parent transaction build output'
+    key output : Association to TransactionBuildOutputs;
+
+        @title      : 'Asset Unit (key)'
+        @description: 'Asset unit (policyId + assetNameHex)'
+    key unit   : AssetUnit;
+
+        @title      : 'Asset Details'
+        @description: 'Structural slice for asset details'
+        asset  : AssetSlice;
+
+}
+
+@title      : 'Transaction Submissions'
+@description: 'Entity for storing transaction submission attempts and status'
+entity TransactionSubmissions {
+
+        @title      : 'Submission ID (key)'
+        @description: 'Unique identifier for the transaction submission'
+    key id                 : UUID;
+
+        @title      : 'Associated Build'
+        @description: 'Association to the transaction build being submitted'
+        build              : Association to TransactionBuilds;
+
+        @title      : 'Signged Tx CBOR'
+        @description: 'The signed transaction CBOR as hex string'
+        signedTxCbor       : LargeString;
+
+        @title      : 'Transaction Hash'
+        @description: 'Actual transaction hash after signing'
+        txHash             : Blake2b256;
+
+        @title      : 'Submission Time'
+        @description: 'Submission time as unix timestamp'
+        submittedAt        : Integer64;
+
+        @title      : 'Submission Status'
+        @description: 'Current status of the transaction submission (pending, submitted, confirmed, failed, rejected)'
+        status             : SubmissionStatus default 'pending' @readonly;
+
+        @title      : 'Error Code'
+        @description: 'Error code if failed'
+        errorCode          : String(50);
+
+        @title      : 'Error Message'
+        @description: 'Detailed error message if failed'
+        errorMessage       : LargeString;
+
+        @title      : 'Retry Count'
+        @description: 'Number of retry attempts'
+        retryCount         : Integer;
+
+        @title      : 'Submission Errors'
+        @description: 'Composition of errors associated with this submission'
+        errors             : Composition of many TransactionSubmissionErrors
+                                 on errors.submission = $self;
+
+        @title      : 'Has Errors'
+        @description: 'Indicates if submission has errors'
+        hasErrors          : Boolean;
+}
+
+@title      : 'Transaction Submission Errors'
+@description: 'Entity for storing errors encountered during transaction submission'
+entity TransactionSubmissionErrors {
+
+        @title      : 'Error ID (key)'
+        @description: 'Unique identifier for the submission error'
+    key id            : UUID;
+
+        @title      : 'Associated Submission'
+        @description: 'Association to parent transaction submission'
+        submission    : Association to TransactionSubmissions;
+
+        @title      : 'Error Occurred At'
+        @description: 'Timestamp when the error occurred as unix timestamp'
+        occurredAt    : Integer64;
+
+        @title      : 'Error Type'
+        @description: 'Type/category of the error encountered'
+        errorType     : String(50);
+
+        @title      : 'Error Code'
+        @description: 'Specific error code'
+        errorCode     : String(50);
+
+        @title      : 'Error Message'
+        @description: 'Detailed error message'
+        errorMessage  : LargeString;
+
+        @title      : 'Error Details'
+        @description: 'Additional error context as JSON'
+        errorDetails  : LargeString;
+
+        @title      : 'Is Recoverable'
+        @description: 'Indicates if error is recoverable via retry'
+        isRecoverable : Boolean;
+}
+
+//-----------------------------------------------------
+// M3 - External Signing Workflow Entities & Address Additions
+//-----------------------------------------------------
+
+@title : 'Address Transactions'
+@description : 'Association entity for transactions involving an address'
+entity AddressTransactions {
+
+        @title      : 'Address (key)'
+        @description: 'The Bech32 encoded address associated with the transaction'
+    key address : Association to Addresses;
+
+        @title      : 'Transaction (key)'
+        @description: 'The associated transaction'
+    key tx      : Association to Transactions;
+
+        @title      : 'Net Amount (Lovelace)'
+        @description: 'Net lovelace change for this address in this transaction (positive = received, negative = sent)'
+        netAmount   : Decimal(20, 0);
+
+        @title      : 'Block Time'
+        @description: 'Block time of the transaction (denormalized for sorting)'
+        blockTime   : Integer64;
+
+        @title      : 'Net Assets'
+        @description: 'JSON array of net asset changes [{unit, policyId, assetName, quantity}] (positive = received, negative = sent)'
+        netAssets   : LargeString;
+
+        @title      : 'Has Assets'
+        @description: 'Indicates if this transaction involves native assets for this address'
+        hasAssets   : Boolean default false;
+}
+
+@title : 'Address Signing Requests'
+@description : 'Association entity for signing requests involving an address'
+entity AddressSigningRequests {
+
+        @title      : 'Address (key)'
+        @description: 'The Bech32 encoded address associated with the signing request'
+    key address : Association to Addresses;
+
+        @title      : 'Signing Request (key)'
+        @description: 'The associated signing request'
+    key signingRequest : Association to SigningRequests;
+}
+
+@title : 'Address Transaction Builds'
+@description : 'Association entity for transaction builds involving an address'
+entity AddressTransactionBuilds{
+
+        @title      : 'Address (key)'
+        @description: 'The Bech32 encoded address associated with the transaction build'
+    key address : Association to Addresses;
+
+        @title      : 'Transaction Build (key)'
+        @description: 'The associated transaction build'
+    key txBuild : Association to TransactionBuilds;
+}
+
+@title      : 'Signing Requests'
+@description: 'Entity for tracking external signing requests and their workflow state'
+entity SigningRequests {
+
+        @title      : 'Signing Request ID (key)'
+        @description: 'Unique identifier for the signing request'
+    key id               : UUID;
+
+        @title      : 'Associated Build'
+        @description: 'Association to the transaction build being signed'
+        build            : Association to TransactionBuilds;
+
+        @title      : 'Transaction Body Hash'
+        @description: 'The hash of the transaction body (data to be signed)'
+        txBodyHash       : Blake2b256;
+
+        @title      : 'Unsigned Transaction CBOR'
+        @description: 'The unsigned transaction in CBOR hex format'
+        unsignedTxCbor   : LargeString;
+
+        @title      : 'Network'
+        @description: 'Cardano network (mainnet | preprod | preview)'
+        network          : String(10);
+
+        @title      : 'Status'
+        @description: 'Current status of the signing request'
+        status           : SigningStatus default 'pending' @readonly;
+
+        @title      : 'Created At'
+        @description: 'Timestamp when the signing request was created'
+        createdAt        : Timestamp;
+
+        @title      : 'Expires At'
+        @description: 'Timestamp when the signing request expires'
+        expiresAt        : Timestamp;
+
+        @title      : 'Signed At'
+        @description: 'Timestamp when the transaction was signed'
+        signedAt         : Timestamp;
+
+        @title      : 'Submitted At'
+        @description: 'Timestamp when the transaction was submitted'
+        submittedAt      : Timestamp;
+
+        @title      : 'Cardano CLI Command'
+        @description: 'Example command to sign with Cardano CLI'
+        cardanoCliCommand : LargeString;
+
+        @title      : 'CIP-30 CBOR'
+        @description: 'Transaction CBOR for browser wallet signing (CIP-30)'
+        cip30TxCbor      : LargeString;
+
+        @title      : 'Signed Transaction CBOR'
+        @description: 'The full signed transaction CBOR, persisted at claim time on the deferred-submit path so an interrupted submission can be re-driven after a restart (see SUBMIT_DETACH_DESIGN.md)'
+        signedTxCbor     : LargeString;
+
+        @title      : 'Signer Type'
+        @description: 'Type of signer used (cardano-cli | browser-wallet | hardware-wallet | custom)'
+        signerType       : String(20);
+
+        @title      : 'Signer Info'
+        @description: 'Additional information about the signer (wallet name, etc.)'
+        signerInfo       : String(100);
+
+        @title      : 'HSM Key ID'
+        @description: 'PKCS#11 key identifier used for HSM signing (audit trail)'
+        hsmKeyId         : String(40);
+
+        @title      : 'Signature Verifications'
+        @description: 'Composition of signature verification attempts'
+        verifications    : Composition of many SignatureVerifications
+                              on verifications.signingRequest = $self;
+
+        @title      : 'Associated Submission'
+        @description: 'Association to the transaction submission (if submitted)'
+        submission       : Association to TransactionSubmissions;
+
+        @title      : 'Error Message'
+        @description: 'Error message if signing or verification failed'
+        errorMessage     : LargeString;
+}
+
+@title      : 'Signature Verifications'
+@description: 'Entity for storing signature verification results'
+entity SignatureVerifications {
+
+        @title      : 'Verification ID (key)'
+        @description: 'Unique identifier for the verification attempt'
+    key id               : UUID;
+
+        @title      : 'Associated Signing Request'
+        @description: 'Association to the parent signing request'
+        signingRequest   : Association to SigningRequests;
+
+        @title      : 'Signed Transaction CBOR'
+        @description: 'The signed transaction CBOR that was verified'
+        signedTxCbor     : LargeString;
+
+        @title      : 'Is Valid'
+        @description: 'Whether the signature is valid'
+        isValid          : Boolean;
+
+        @title      : 'Transaction Body Hash'
+        @description: 'The verified transaction body hash'
+        txBodyHash       : Blake2b256;
+
+        @title      : 'Witness Count'
+        @description: 'Number of signatures found'
+        witnessCount     : Integer;
+
+        @title      : 'Signer Key Hashes'
+        @description: 'JSON array of public key hashes that signed the transaction'
+        signerKeyHashes  : LargeString;
+
+        @title      : 'Error Message'
+        @description: 'Error message if verification failed'
+        errorMessage     : LargeString;
+
+        @title      : 'Warnings'
+        @description: 'JSON array of warning messages'
+        warnings         : LargeString;
+
+        @title      : 'Verified At'
+        @description: 'Timestamp when the verification was performed'
+        verifiedAt       : Timestamp;
+}
+
+// -----------------------------------------------------
+// Chain Crawler / Pre-Sync (v2.0)
+// -----------------------------------------------------
+
+@title      : 'Cardano Sync State'
+@description: 'Singleton crawl cursor tracking the pre-sync progress of the chain crawler'
+entity CardanoSyncState {
+
+        @title      : 'Cursor Id (Key)'
+        @description: 'Singleton key — always the literal string SINGLETON'
+    key ID                : String(10) default 'SINGLETON';
+
+        @title      : 'Network'
+        @description: 'The Cardano network this cursor tracks (mainnet | preprod | preview)'
+        network           : String(10);
+
+        @title      : 'Start Slot'
+        @description: 'Absolute slot of the configured pre-sync origin (immutable once syncing starts)'
+        startSlot         : Integer64;
+
+        @title      : 'Start Block Hash'
+        @description: 'Block hash of the configured pre-sync origin'
+        startBlockHash    : Blake2b256;
+
+        @title      : 'Last Slot'
+        @description: 'Absolute slot of the last indexed block (resume point)'
+        lastSlot          : Integer64 default 0;
+
+        @title      : 'Last Block Hash'
+        @description: 'Hash of the last indexed block — used for the reorg parent-hash check'
+        lastBlockHash     : Blake2b256;
+
+        @title      : 'Last Height'
+        @description: 'Block height of the last indexed block'
+        lastHeight        : Integer64 default 0;
+
+        @title      : 'Last Indexed At'
+        @description: 'Wall-clock timestamp of the last successful block persist'
+        lastIndexedAt     : Timestamp;
+
+        @title      : 'Tip Slot'
+        @description: 'Latest known chain-tip slot, for lag/progress calculation'
+        tipSlot           : Integer64;
+
+        @title      : 'Tip Height'
+        @description: 'Latest known chain-tip height'
+        tipHeight         : Integer64;
+
+        @title      : 'Sync Status'
+        @description: 'Current crawler state (stopped | syncing | synced | error)'
+        syncStatus        : CrawlSyncStatus default 'stopped';
+
+        // NOTE: live progress is computed by CardanoIndexerService.getStatus from
+        // lastHeight/tipHeight — deliberately NOT persisted here (a stored copy went
+        // stale immediately and misled OData readers).
+
+        @title      : 'Last Error'
+        @description: 'Message of the most recent crawler error (null when healthy)'
+        lastError         : String(500);
+
+        @title      : 'Last Error At'
+        @description: 'Timestamp of the most recent crawler error'
+        lastErrorAt       : Timestamp;
+
+        @title      : 'Consecutive Errors'
+        @description: 'Count of back-to-back failures; trips the circuit breaker past its threshold'
+        consecutiveErrors : Integer default 0;
+
+        @title      : 'Crawler Desired Running State'
+        @description: 'Cluster-wide operator intent. False fences every crawler instance before its next write.'
+        desiredRunning    : Boolean default true;
+
+        @title      : 'Crawler Lease Owner'
+        @description: 'Opaque process identifier of the single crawler instance currently allowed to write'
+        leaseOwner        : String(128);
+
+        @title      : 'Crawler Lease Expiry'
+        @description: 'Lease deadline renewed by the active crawler; another instance may take over only after this time'
+        leaseUntil        : Timestamp;
+}
+
+@title      : 'Cardano Reorg Log'
+@description: 'Audit trail of chain rollbacks (reorgs) handled by the crawler'
+entity CardanoReorgLog {
+
+        @title      : 'Reorg Id (Key)'
+        @description: 'Unique identifier of the reorg event'
+    key ID               : UUID;
+
+        @title      : 'Detected At'
+        @description: 'Timestamp when the rollback was detected'
+        detectedAt       : Timestamp;
+
+        @title      : 'Fork Slot'
+        @description: 'Absolute slot of the common ancestor the chain rolled back to'
+        forkSlot         : Integer64;
+
+        @title      : 'Fork Height'
+        @description: 'Block height of the common ancestor the chain rolled back to'
+        forkHeight       : Integer64;
+
+        @title      : 'Old Tip Hash'
+        @description: 'Hash of the abandoned tip before the rollback'
+        oldTipHash       : Blake2b256;
+
+        @title      : 'New Tip Hash'
+        @description: 'Hash of the block the chain rolled back to'
+        newTipHash       : Blake2b256;
+
+        @title      : 'Blocks Rolled Back'
+        @description: 'Number of blocks (and their child rows) deleted during rollback'
+        blocksRolledBack : Integer;
+
+        @title      : 'Status'
+        @description: 'Lifecycle of the reorg handling (detected | rolling_back | reindexing | completed)'
+        status           : ReorgStatus;
+}
+
+// -----------------------------------------------------
+// Wallet Worker / Job Engine (v2.1)
+// -----------------------------------------------------
+
+@title      : 'Cardano Worker Wallets'
+@description: 'Operator-registered server-side wallets the wallet worker executes jobs from. No key material is ever stored here.'
+entity CardanoWorkerWallets {
+
+        @title      : 'Wallet Id (Key)'
+        @description: 'Stable operator-chosen handle used in job requests'
+    key walletId      : String(50);
+
+        @title      : 'Signer Type'
+        @description: 'How this wallet signs (hsm | software)'
+        signerType    : WorkerSignerType;
+
+        @title      : 'Address'
+        @description: 'Bech32 address derived from the signing key at worker init (informational)'
+        address       : Bech32;
+
+        @title      : 'Public Key Hash'
+        @description: 'Blake2b-224 hash of the wallet verification key'
+        publicKeyHash : Blake2b224;
+
+        @title      : 'Enabled'
+        @description: 'Disabled wallets accept no new jobs and are skipped by the dispatch loop'
+        enabled       : Boolean default true;
+
+        @title      : 'Wallet Lease Owner'
+        @description: 'Opaque process identifier of the single worker instance currently allowed to execute jobs for this wallet'
+        leaseOwner    : String(128);
+
+        @title      : 'Wallet Lease Expiry'
+        @description: 'Lease deadline renewed by the executing worker; another instance may take over only after this time'
+        leaseUntil    : Timestamp;
+
+        @title      : 'Last Job At'
+        @description: 'Timestamp of the most recent job execution for this wallet'
+        lastJobAt     : Timestamp;
+
+        @title      : 'Jobs Confirmed'
+        @description: 'Rolling count of jobs that reached confirmed state'
+        jobsConfirmed : Integer64 default 0;
+
+        @title      : 'Jobs Failed'
+        @description: 'Rolling count of jobs that reached failed state'
+        jobsFailed    : Integer64 default 0;
+}
+
+@title      : 'Cardano Wallet Jobs'
+@description: 'Asynchronous transaction jobs executed by the wallet worker (build → sign → submit → confirm)'
+// Idempotency is enforced by the DATABASE, not by a read-before-insert check:
+// concurrent retries of the same key (two app instances, or two HANA sessions)
+// can both find no existing job and both insert. The unique constraint makes one
+// of them lose, and insertJob returns the winner's job to it. See `dedupKey`.
+// Generates a table UNIQUE constraint on SQLite and a UNIQUE INVERTED INDEX on HANA.
+@assert.unique.dedup: [
+    walletId,
+    kind,
+    dedupKey
+]
+entity CardanoWalletJobs {
+
+        @title      : 'Job Id (Key)'
+        @description: 'Unique identifier of the job, returned by SubmitWalletJob'
+    key ID             : UUID;
+
+        @title      : 'Wallet Id'
+        @description: 'The worker wallet this job executes from'
+        walletId       : String(50);
+
+        @title      : 'Job Kind'
+        @description: 'Transaction kind (simpleAda | metadata | multiAsset | mint | plutusSpend | submitSigned)'
+        kind           : WalletJobKind;
+
+        @title      : 'Status'
+        @description: 'Job lifecycle state (pending | building | submitting | submitted | confirmed | failed | cancelled)'
+        status         : WalletJobStatus default 'pending';
+
+        @title      : 'Idempotency Key'
+        @description: 'Optional caller-supplied dedup key — a non-failed job with the same (walletId, kind, idempotencyKey) is returned instead of creating a new one'
+        idempotencyKey : String(100);
+
+        @title      : 'Dedup Key (internal)'
+        @description: 'Backing value of the unique (walletId, kind, dedupKey) constraint: the caller idempotency key while the job holds it, otherwise the job ID (unique by construction). Keyless jobs and terminated jobs therefore never collide — no reliance on NULL semantics, which differ across databases.'
+        dedupKey       : String(100);
+
+        @title      : 'Request'
+        @description: 'The build-action payload as JSON, verbatim (validated before insert; never contains key material)'
+        request        : LargeString;
+
+        @title      : 'Priority'
+        @description: 'Dispatch order within a wallet queue — lower runs sooner (default 100)'
+        priority       : Integer default 100;
+
+        @title      : 'Not Before'
+        @description: 'Optional earliest execution time (one-shot scheduling)'
+        notBefore      : Timestamp;
+
+        @title      : 'Attempt'
+        @description: 'Number of execution attempts made so far'
+        attempt        : Integer default 0;
+
+        @title      : 'Max Attempts'
+        @description: 'Bound for transient-failure retries (build/submit); deterministic rejections fail immediately'
+        maxAttempts    : Integer default 3;
+
+        @title      : 'Transaction Hash'
+        @description: 'Hash of the signed transaction — persisted before the submit call (status submitting), so a crash mid-submit stays reconcilable'
+        txHash         : Blake2b256;
+
+        @title      : 'Unsigned Transaction CBOR'
+        @description: 'The built unsigned transaction, kept for diagnosis until the job confirms'
+        unsignedTxCbor : LargeString;
+
+        @title      : 'Signed Transaction CBOR'
+        @description: 'The signed transaction, stored before submission — reused verbatim for crash reconciliation and rollback re-submission (never rebuilt)'
+        signedTxCbor   : LargeString;
+
+        @title      : 'Fee'
+        @description: 'Transaction fee in lovelace, from the build result'
+        fee            : Lovelace;
+
+        @title      : 'Submitted At'
+        @description: 'Timestamp of the submission attempt (written with the signed tx, before it is sent) — the base for the confirmation timeout'
+        submittedAt    : Timestamp;
+
+        @title      : 'Confirmed At'
+        @description: 'Timestamp when the configured confirmation depth was reached'
+        confirmedAt    : Timestamp;
+
+        @title      : 'Confirmed Slot'
+        @description: 'Absolute slot of the block containing the transaction — used for reorg checks'
+        confirmedSlot  : Integer64;
+
+        @title      : 'Confirmed Height'
+        @description: 'Block height of the block containing the transaction — used for depth calculation'
+        confirmedHeight : Integer64;
+
+        @title      : 'Error Code'
+        @description: 'Machine-readable code of the terminal failure (null while healthy)'
+        errorCode      : String(50);
+
+        @title      : 'Error Message'
+        @description: 'Human-readable message of the terminal failure'
+        errorMessage   : String(500);
+
+        @title      : 'Created At'
+        @description: 'Timestamp the job was accepted'
+        createdAt      : Timestamp;
+
+        @title      : 'Created By'
+        @description: 'User id of the caller that submitted the job'
+        createdBy      : String(100);
+
+        @title      : 'Finished At'
+        @description: 'Timestamp the job reached a terminal state (confirmed | failed | cancelled)'
+        finishedAt     : Timestamp;
+}
+
+/**
+ * Agent grants (v2.0): scoped bearer capabilities an Admin hands to an agent
+ * instead of a full user. The token is a capability, not an identity — it is
+ * stored as SHA-256 only, and a request carrying it runs as the principal
+ * `agent:<ID>` with the role `agent-grant`, never as the operator. Enforcement
+ * (allow list, wallet pinning, daily budget) lives in srv/utils/agent-grants.ts;
+ * the transport lane that admits `x-agent-token` in srv/utils/agent-token-auth.ts.
+ * Admin-only table: creation and revocation happen through CardanoAgentService
+ * actions, a token request may read its own row only.
+ */
+@title      : 'Agent Grants'
+@description: 'Scoped, budgeted bearer capabilities for agents (token stored as SHA-256 only)'
+entity CardanoAgentGrants {
+
+        @title      : 'Grant Id (Key)'
+    key ID              : UUID;
+
+        @title      : 'Operator'
+        @description: 'User id of the Admin that issued the grant (audit; the token never runs as this user)'
+        userId          : String(200) not null;
+
+        @title      : 'Agent Label'
+        @description: 'Human-readable agent name, informational'
+        agentLabel      : String(100);
+
+        @title      : 'Token Hash'
+        @description: 'SHA-256 of the bearer token; the token itself is shown once and never stored'
+        tokenHash       : String(64) not null;
+
+        @title      : 'Allowed Actions'
+        @description: 'JSON array of allow-listed action names (builds, signing-request lifecycle, submits, wallet jobs)'
+        allowedActions  : LargeString not null;
+
+        @title      : 'Wallet Id'
+        @description: 'Worker wallet this grant is pinned to; required for SubmitWalletJob / CancelJob, injected into those requests'
+        walletId        : String(50);
+
+        @title      : 'Allowed Job Kinds'
+        @description: 'JSON array of WalletJobKind values the grant may queue; null = every kind'
+        allowedJobKinds : LargeString;
+
+        @title      : 'Max Jobs Per Day'
+        @description: 'Daily budget of allow-listed action calls (UTC day); null = unlimited'
+        maxJobsPerDay   : Integer;
+
+        @title      : 'Jobs Used Today'
+        @description: 'Budget consumed inside budgetWindow'
+        jobsUsedToday   : Integer default 0;
+
+        @title      : 'Budget Window'
+        @description: 'UTC day YYYY-MM-DD the counter belongs to'
+        budgetWindow    : String(10);
+
+        @title      : 'Valid Until'
+        @description: 'Expiry; null = no expiry'
+        validUntil      : Timestamp;
+
+        @title      : 'Is Active'
+        @description: 'False once revoked; a revoked token is an unknown token'
+        isActive        : Boolean default true;
+
+        @title      : 'Revoked At'
+        revokedAt       : Timestamp;
+
+        @title      : 'Created At'
+        createdAt       : Timestamp;
+
+        @title      : 'Last Used At'
+        @description: 'Last request admitted under this token (updated at most once a minute)'
+        lastUsedAt      : Timestamp;
+}
+
+/**
+ * Daily per-action counters of admitted calls under a grant (feeds
+ * CardanoAgentService.GetGrantUsage). Written by the enforcement hook next to
+ * the daily budget: `calls + 1` when a call is admitted, `refunded + 1` when the
+ * handler then refuses its input. Not exposed as an entity — the function is
+ * the contract. A few dozen rows per grant and day at most; no retention job yet.
+ */
+entity CardanoAgentGrantUsage {
+
+        @title      : 'Grant'
+    key grant    : Association to CardanoAgentGrants;
+
+        @title      : 'Day'
+        @description: 'UTC day YYYY-MM-DD the call was admitted on'
+    key day      : String(10);
+
+        @title      : 'Service'
+        @description: 'CAP service name (CardanoTransactionService, CardanoSignService, ...)'
+    key service  : String(60);
+
+        @title      : 'Action'
+        @description: 'Action name (BuildSimpleAdaTransaction, SubmitTransaction, ...)'
+    key action   : String(100);
+
+        @title      : 'Calls'
+        @description: 'Admitted calls (budget charged where the grant has one)'
+        calls    : Integer default 0;
+
+        @title      : 'Refunded'
+        @description: 'Admitted calls whose handler refused the input (400..428); their unit was given back'
+        refunded : Integer default 0;
+}

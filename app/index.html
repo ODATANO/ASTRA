@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en" data-theme="night">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ODATANO ASTRA</title>
+  <meta name="description" content="Live analytics for Cardano and Midnight: blocks, transactions, fees, rankings and reorgs of one network, computed by ODATANO ASTRA from the data the hosted ODATANO and NIGHTGATE index. Every number names the block range it came from." />
+  <link rel="icon" href="/brand/logos/astra-icon.svg" type="image/svg+xml" />
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="ODATANO ASTRA" />
+  <meta property="og:title" content="ODATANO ASTRA" />
+  <meta property="og:description" content="Live analytics for Cardano and Midnight: blocks, transactions, fees, rankings and reorgs, every number with the block range it came from." />
+  <meta property="og:url" content="https://astra.preprod.odatano.dev/" />
+  <meta property="og:image" content="https://astra.preprod.odatano.dev/og-image.png" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
+  <meta property="og:image:alt" content="ODATANO ASTRA: analytics for Cardano and Midnight" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="ODATANO ASTRA" />
+  <meta name="twitter:description" content="Live analytics for Cardano and Midnight: blocks, transactions, fees, rankings and reorgs, every number with the block range it came from." />
+  <meta name="twitter:image" content="https://astra.preprod.odatano.dev/og-image.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/astra.css" />
+  <script>try{var t=localStorage.getItem('odatano.theme');document.documentElement.dataset.theme=(t==='night'||t==='day')?t:'night';}catch(e){document.documentElement.dataset.theme='night';}</script>
+  <script>
+    // One ASTRA instance serves one network (the badge shows what the sources report).
+    // `networks` is the fallback for the switch in the filter row; the server's /api/networks
+    // (ASTRA_NETWORKS, probed every minute) replaces it when it answers. No `url` shows as "soon".
+    // `api` may be overridden for local work with ?api=http://host:4017/odata/v4/astra.
+    window.ASTRA_CONFIG = {
+      api: '/odata/v4/astra',
+      refreshMs: 60000,
+      networks: [
+        { id: 'preview', url: '' },
+        { id: 'preprod', url: '' },
+        { id: 'mainnet', url: '' }
+      ]
+    };
+  </script>
+</head>
+<body>
+  <header class="top">
+    <div class="wrap">
+      <a href="/" class="brand"><img class="wordmark only-day" src="/brand/logos/astra-logo.svg" alt="ODATANO ASTRA" /><img class="wordmark only-night" src="/brand/logos/astra-logo-on-dark.svg" alt="ODATANO ASTRA" /><img class="mark" src="/brand/logos/astra-icon.svg" alt="ODATANO ASTRA" /><span class="net" id="netBadge">…</span></a>
+      <nav id="menu">
+        <div class="nav-links">
+          <a href="#activity">Activity</a>
+          <a href="#rankings">Rankings</a>
+          <a href="/odata/v4/astra/$metadata" id="apiLink">API</a>
+        </div>
+      </nav>
+      <div class="top-actions">
+        <button class="theme" id="theme" type="button" title="Switch day / night" aria-label="Switch theme"><svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg><svg class="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></button>
+        <button class="burger" id="burger" type="button" aria-label="Toggle navigation menu" aria-expanded="false" aria-controls="menu"><span></span><span></span><span></span></button>
+      </div>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <section class="hero">
+      <div>
+        <h1>What is happening on <em>Cardano</em> and <em>Midnight</em>, right now.</h1>
+        <p class="lead">
+          Blocks, transactions, fees and rankings of both chains, computed by ODATANO ASTRA from the data the hosted ODATANO and NIGHTGATE index. Every number names the block range it came from.
+        </p>
+        <div class="facts"><span id="factNetwork">…</span><span id="factCardano">Cardano …</span><span id="factMidnight">Midnight …</span></div>
+      </div>
+      <pre data-label="http"><span class="label">http</span><code><span class="c"># base <span id="heroBase">…</span></span>
+
+<span class="k">GET </span> /ChainOverview
+<span class="k">GET </span> /KeyFigures?$filter=chain eq 'cardano' and window eq '7d'
+<span class="k">GET </span> /getSeries(chain='midnight',metric='tx.count',window='24h')
+<span class="k">GET </span> /compare(metric='fees.paid',window='7d')
+<span class="k">GET </span> /TopBlockProducers?$filter=window eq '7d' and rank le 10
+<span class="k">GET </span> /getAnomalies(chain='cardano',threshold=2.5,baselineDays=7)</code></pre>
+    </section>
+
+    <div class="filters" id="filters">
+      <div class="seg" role="group" aria-label="Window" id="windowSeg">
+        <button type="button" data-window="24h">24 h</button>
+        <button type="button" data-window="7d" class="on">7 d</button>
+        <button type="button" data-window="30d">30 d</button>
+      </div>
+      <div class="netswitch" id="netSwitch" aria-label="Networks"></div>
+      <span class="spacer"></span>
+      <span class="small" id="updated"></span>
+      <button class="btn btn--ghost btn--sm" id="refresh" type="button">Refresh</button>
+    </div>
+
+    <section class="section" id="now">
+      <div class="section-head"><h2>Now</h2></div>
+      <div class="grid chains">
+        <article class="card product cardano" id="ovCardano">
+          <div class="logo"><img class="chain only-day" src="/brand/logos/cardano-horizontal-blue.svg" alt="Cardano" /><img class="chain only-night" src="/brand/logos/cardano-horizontal-white.svg" alt="Cardano" /><span class="spacer"></span><span class="pill" data-sync>…</span></div>
+          <div class="stats" data-stats></div>
+        </article>
+        <article class="card product midnight" id="ovMidnight">
+          <div class="logo"><img class="chain only-day" src="/brand/logos/midnight-logo-horizontal-dark.svg" alt="Midnight" /><img class="chain only-night" src="/brand/logos/midnight-logo-horizontal-white.svg" alt="Midnight" /><span class="spacer"></span><span class="pill" data-sync>…</span></div>
+          <div class="stats" data-stats></div>
+        </article>
+      </div>
+    </section>
+
+    <section class="section" id="heartbeat">
+      <div class="section-head"><h2>Heartbeat</h2></div>
+      <div class="grid">
+        <article class="card chart" data-chart="hbCardano"><div class="chart-head"><h3>Cardano</h3><span class="sub">blocks / min</span></div></article>
+        <article class="card chart" data-chart="hbMidnight"><div class="chart-head"><h3>Midnight</h3><span class="sub">blocks / min</span></div></article>
+      </div>
+    </section>
+
+    <section class="section" id="activity">
+      <div class="section-head"><h2>Activity</h2></div>
+      <div class="stack">
+        <article class="card chart" data-chart="tx"><div class="chart-head"><h3>Transactions</h3><span class="sub" data-sub>per day</span></div></article>
+        <div class="grid">
+          <article class="card chart" data-chart="feesCardano"><div class="chart-head"><h3>Fees on Cardano</h3><span class="sub">per transaction</span></div></article>
+          <article class="card chart" data-chart="feesMidnight"><div class="chart-head"><h3>Fees on Midnight</h3><span class="sub">per transaction</span></div></article>
+        </div>
+        <div class="grid">
+          <article class="card chart" data-chart="distCardano"><div class="chart-head"><h3>Fee distribution, Cardano</h3><span class="sub">transactions per fee band</span></div></article>
+          <article class="card chart" data-chart="distMidnight"><div class="chart-head"><h3>Fee distribution, Midnight</h3><span class="sub">transactions per fee band</span></div></article>
+        </div>
+        <div class="grid">
+          <article class="card chart" data-chart="mixCardano"><div class="chart-head"><h3>Transaction mix, Cardano</h3><span class="sub">share of transactions</span></div></article>
+          <article class="card chart" data-chart="mixMidnight"><div class="chart-head"><h3>Transaction mix, Midnight</h3><span class="sub">share of transactions</span></div></article>
+        </div>
+        <div class="grid">
+          <article class="card chart" data-chart="empty"><div class="chart-head"><h3>Empty blocks</h3><span class="sub">share of blocks</span></div></article>
+          <article class="card chart" data-chart="txPerBlock"><div class="chart-head"><h3>Transactions per block</h3><span class="sub">average</span></div></article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="rankings">
+      <div class="section-head"><h2>Rankings</h2></div>
+      <div class="stack">
+        <div class="grid">
+          <article class="card" data-board="producersCardano"><div class="chart-head"><h3>Block producers, Cardano</h3><span class="sub">blocks produced</span></div><div class="stats compact" data-conc></div><div class="table-wrap" data-table></div></article>
+          <article class="card" data-board="producersMidnight"><div class="chart-head"><h3>Block producers, Midnight</h3><span class="sub">blocks produced</span></div><div class="stats compact" data-conc></div><div class="table-wrap" data-table></div></article>
+        </div>
+        <div class="grid">
+          <article class="card" data-board="tokens"><div class="chart-head"><h3>Tokens, Cardano</h3><span class="sub">transfers</span></div><div class="table-wrap" data-table></div></article>
+          <article class="card" data-board="policies"><div class="chart-head"><h3>Policies, Cardano</h3><span class="sub">transfers</span></div><div class="table-wrap" data-table></div></article>
+        </div>
+        <div class="grid">
+          <article class="card" data-board="addresses"><div class="chart-head"><h3>Addresses, Cardano</h3><span class="sub">value received</span></div><div class="table-wrap" data-table></div></article>
+          <article class="card" data-board="scripts"><div class="chart-head"><h3>Script addresses, Cardano</h3><span class="sub">value received</span></div><div class="table-wrap" data-table></div></article>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <footer><div class="wrap">
+    <img class="only-day" src="/brand/logos/odatano-logo.svg" alt="ODATANO" /><img class="only-night" src="/brand/logos/odatano-logo-on-dark.svg" alt="ODATANO" />
+    <a href="https://odatano.dev/docs/security/">Security and data</a>
+    <a href="https://odatano.dev/imprint/">Imprint</a>
+    <a href="https://odatano.dev/privacy/">Privacy</a>
+    <a href="https://github.com/ODATANO/ASTRA" target="_blank" rel="noopener">GitHub</a>
+    <span class="spacer"></span>
+    <a href="https://odatano.dev/">odatano.dev</a>
+  </div></footer>
+
+  <div class="tip" id="tip" hidden></div>
+  <script src="/astra.js"></script>
+</body>
+</html>

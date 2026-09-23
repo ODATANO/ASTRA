@@ -1,0 +1,7 @@
+# Normalise line endings in the repo; the shell scripts and the Dockerfile
+# run on Linux (container, box) and must stay LF on every checkout.
+* text=auto
+*.sh text eol=lf
+Dockerfile text eol=lf
+*.sql text eol=lf
+*.csv text eol=lf
