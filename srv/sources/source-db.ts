@@ -138,3 +138,25 @@ export async function ensureSqliteSchema(srv: any, chain: Chain, model?: any): P
 export function resetSourceCache(): void {
   serviceCache.clear();
 }
+
+/**
+ * Drop a chain's cached connection so the next `connectSource` opens a fresh
+ * one. The old pool is asked to close, but not waited on for long: the reason
+ * to be here is a pool whose sockets stopped answering. CAP also caches the
+ * service by name, so that entry goes too, or `cds.connect.to` would hand the
+ * dead service straight back.
+ */
+export async function disconnectSource(chain: Chain): Promise<void> {
+  const pending = serviceCache.get(chain);
+  serviceCache.delete(chain);
+  const name = `astra-source-${chain}`;
+  delete (cds.services as any)[name];
+  if (!pending) return;
+  try {
+    const srv: any = await pending;
+    await Promise.race([
+      Promise.resolve(srv?.disconnect?.()).catch(() => undefined),
+      new Promise(res => { const t = setTimeout(res, 5000); (t as any).unref?.(); }),
+    ]);
+  } catch { /* a connection that never opened has nothing to close */ }
+}

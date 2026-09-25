@@ -10,7 +10,7 @@
 import cds from '@sap/cds';
 import type {
   AddressMoveRow, AssetMoveRow, BlockRow, ChainSource, DrepSnapshotRow, EpochSnapshotSet,
-  PoolSnapshotRow, ReorgRow, SourceTip, TxRow,
+  PoolSnapshotRow, ReorgRow, SourceTip, StakeActivity, TxRow,
 } from './types';
 import { num, toUnixSeconds } from './types';
 
@@ -36,6 +36,8 @@ const E = {
   PoolSnapshots: 'odatano.cardano.PoolEpochSnapshots',
   DrepSnapshots: 'odatano.cardano.DrepEpochSnapshots',
   ReorgLog: 'odatano.cardano.CardanoReorgLog',
+  Certificates: 'odatano.cardano.TransactionCertificates',
+  Withdrawals: 'odatano.cardano.TransactionWithdrawals',
 };
 
 export class CardanoSource implements ChainSource {
@@ -73,12 +75,17 @@ export class CardanoSource implements ChainSource {
     return num(m?.h);
   }
 
-  async findFirstHeightAt(unixSeconds: number): Promise<number | null> {
+  /**
+   * `maxHeight` bounds the search to the crawled range: header-only rows the source writes at
+   * the chain tip lie far above its cursor while it backfills, and would otherwise be taken
+   * for the first block at the start time.
+   */
+  async findFirstHeightAt(unixSeconds: number, maxHeight?: number): Promise<number | null> {
     // Blocks.time is an ISO string; the second-precision prefix compares correctly against any ISO variant.
     const iso = new Date(unixSeconds * 1000).toISOString().slice(0, 19);
-    const b = await this.run(
-      SELECT.one.from(E.Blocks).columns('height').where({ time: { '>=': iso } }).orderBy('time asc'),
-    );
+    const q = SELECT.one.from(E.Blocks).columns('height').where({ time: { '>=': iso } });
+    if (maxHeight !== undefined) q.where({ height: { '<=': maxHeight } });
+    const b = await this.run(q.orderBy('time asc'));
     return b ? num(b.height) : null;
   }
 
@@ -275,6 +282,47 @@ export class CardanoSource implements ChainSource {
       };
       push(outputs, 'outputIndex', outAmt, 'out');
       push(inputs, 'inputIndex', inAmt, 'in');
+    }
+    return out;
+  }
+
+  /**
+   * Certificates and withdrawals of the range, keyed back to their block through the
+   * transaction. The source writes both tables only with its certificate crawl on; before that
+   * (and for blocks crawled earlier) the tables are simply empty, which reads as no activity.
+   */
+  async getStakeActivity(fromHeight: number, toHeight: number): Promise<StakeActivity> {
+    const at = await this.txTimes(fromHeight, toHeight);
+    const out: StakeActivity = { certificates: [], withdrawals: [] };
+    if (at.size === 0) return out;
+
+    for (const part of chunk([...at.keys()], HASH_CHUNK)) {
+      const [certs, withdrawals] = await Promise.all([
+        this.run(SELECT.from(E.Certificates).columns('tx_hash', 'certIndex', 'kind', 'stakeAddress', 'poolId', 'drepId', 'deposit', 'epoch')
+          .where({ tx_hash: { in: part } })),
+        this.run(SELECT.from(E.Withdrawals).columns('tx_hash', 'stakeAddress', 'lovelace')
+          .where({ tx_hash: { in: part } })),
+      ]);
+      for (const r of certs) {
+        const where = at.get(String(r.tx_hash));
+        if (!where || !r.kind) continue;
+        out.certificates.push({
+          height: where.height, time: where.time, txHash: String(r.tx_hash), kind: String(r.kind),
+          stakeAddress: r.stakeAddress ? String(r.stakeAddress) : null,
+          poolId: r.poolId ? String(r.poolId) : null,
+          drepId: r.drepId ? String(r.drepId) : null,
+          deposit: num(r.deposit),
+          epoch: num(r.epoch),
+        });
+      }
+      for (const r of withdrawals) {
+        const where = at.get(String(r.tx_hash));
+        if (!where || !r.stakeAddress) continue;
+        out.withdrawals.push({
+          height: where.height, time: where.time, txHash: String(r.tx_hash),
+          stakeAddress: String(r.stakeAddress), lovelace: num(r.lovelace) ?? 0,
+        });
+      }
     }
     return out;
   }

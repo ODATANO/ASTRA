@@ -8,6 +8,7 @@
  */
 import cds from '@sap/cds';
 import { startScheduler, stopScheduler } from './aggregator/scheduler';
+import { ensureDbIndexes } from './aggregator/db-indexes';
 
 const LOG = cds.log('astra');
 
@@ -84,6 +85,8 @@ cds.on('bootstrap', (app: any) => {
 cds.on('served', async () => {
   if (process.env.SKIP_AUTO_INIT === 'true') return;
   try {
+    // before the scheduler: a first build locks writes on EntityBuckets
+    await ensureDbIndexes();
     const chains = await startScheduler();
     LOG.info(chains.length ? `aggregating: ${chains.join(', ')}` : 'idle – no sources');
   } catch (e: any) {

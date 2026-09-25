@@ -111,6 +111,41 @@ export interface EpochSnapshotSet {
   dreps: DrepSnapshotRow[];
 }
 
+/**
+ * One certificate a transaction carried, as the source normalised it: `kind` is
+ * `stake_registration`, `stake_deregistration`, `pool_delegation`, `vote_delegation`,
+ * `pool_registration`, `pool_retirement`, `drep_registration`, `drep_deregistration`, ...;
+ * an unknown source type keeps its raw name.
+ */
+export interface CertificateRow {
+  height: number;
+  /** Unix seconds (block time). */
+  time: number;
+  txHash: string;
+  kind: string;
+  stakeAddress: string | null;
+  poolId: string | null;
+  drepId: string | null;
+  /** Deposit paid or refunded in lovelace, when the source reports it. */
+  deposit: number | null;
+  /** Retirement epoch of a pool_retirement certificate. */
+  epoch: number | null;
+}
+
+/** One reward-account withdrawal of a transaction. */
+export interface WithdrawalRow {
+  height: number;
+  time: number;
+  txHash: string;
+  stakeAddress: string;
+  lovelace: number;
+}
+
+export interface StakeActivity {
+  certificates: CertificateRow[];
+  withdrawals: WithdrawalRow[];
+}
+
 export interface ReorgRow {
   id: string;
   detectedAt: string;
@@ -128,7 +163,7 @@ export interface ChainSource {
   /** Lowest height of the contiguous range the source crawler owns. */
   getCrawlStartHeight(): Promise<number | null>;
   /** First block at or after the given unix time, null when none. */
-  findFirstHeightAt(unixSeconds: number): Promise<number | null>;
+  findFirstHeightAt(unixSeconds: number, maxHeight?: number): Promise<number | null>;
   /** Blocks in [fromHeight, toHeight], ascending by height. */
   getBlocks(fromHeight: number, toHeight: number): Promise<BlockRow[]>;
   /** Transactions of the blocks in [fromHeight, toHeight]. */
@@ -143,6 +178,11 @@ export interface ChainSource {
    * per input spent, with the address and the native amount. Optional.
    */
   getAddressActivity?(fromHeight: number, toHeight: number): Promise<AddressMoveRow[]>;
+  /**
+   * Certificates and withdrawals of the blocks in [fromHeight, toHeight]. Optional; a source
+   * that does not record them (or whose crawler has the feature off) answers empty lists.
+   */
+  getStakeActivity?(fromHeight: number, toHeight: number): Promise<StakeActivity>;
   /** Highest epoch the source holds a pool/DRep snapshot for, null when it has none. */
   getLatestSnapshotEpoch?(): Promise<number | null>;
   /** Pool and DRep snapshots of one epoch. */

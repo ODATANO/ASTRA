@@ -8,21 +8,25 @@
  * again appends blocks from the last block up to "now" – a cheap way to
  * simulate a live chain while the aggregator polls.
  *
- *   npm run sources:seed              append up to now (first run: last 26 h)
+ *   npm run sources:seed              append up to now (first run: last 35 days, so 7 d / 30 d windows are full)
  *   npm run sources:seed -- --hours 72
  *   npm run sources:reset             delete the files and seed afresh
  *   npm run sources:seed -- --reorg   append a reorg entry that rolls back the last 5 blocks
+ *
+ * A chain whose source is a real (Postgres) database is skipped: the seed only
+ * ever writes into the local SQLite files.
  */
 import cds from '@sap/cds';
 import { rmSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
-import { connectSource, loadSourceModel } from '../srv/sources/source-db';
+import { connectSource, loadSourceModel, resolveSourceConfig } from '../srv/sources/source-db';
+import type { Chain } from '../srv/sources/types';
 
 const { SELECT, INSERT, UPSERT, DELETE } = cds.ql;
 const args = process.argv.slice(2);
 const flag = (n: string) => args.includes(`--${n}`);
 const opt = (n: string, d: string) => { const i = args.indexOf(`--${n}`); return i >= 0 && args[i + 1] ? args[i + 1] : d; };
-const HOURS = Number(opt('hours', '26'));
+const HOURS = Number(opt('hours', String(35 * 24)));
 const uuid = () => cds.utils.uuid();
 const hex = (n: number) => Array.from({ length: n }, () => Math.floor(Math.random() * 16).toString(16)).join('');
 let seed = 42;
@@ -36,11 +40,102 @@ async function main() {
     console.log('sources reset');
   }
   await cds.connect.to('db').catch(() => undefined);
-  await seedCardano();
-  await seedMidnight();
+  if (demoSource('cardano')) await seedCardano();
+  if (demoSource('midnight')) await seedMidnight();
   await (cds as any).shutdown?.();
   process.exit(0);
 }
+
+/** Only the local SQLite files get synthetic rows; a chain pointed at a real (Postgres) source is left alone. */
+function demoSource(chain: Chain): boolean {
+  const cfg = resolveSourceConfig(chain);
+  if (cfg?.kind === 'sqlite') return true;
+  console.log(`[${chain}] source is ${cfg ? cfg.kind : 'off'}, not a demo SQLite file – skipped`);
+  return false;
+}
+
+/**
+ * `cds deploy` gives the source files primary keys only. The adapters read
+ * blocks by height / time and transactions through their block, fee and result
+ * links; without these indexes a 200-block chunk scans every row (22 s per
+ * chunk on 35 days of Midnight) and the single SQLite connection of ASTRA's
+ * own database starves the other chain and the dashboard behind it.
+ */
+const DEMO_INDEXES: Record<Chain, string[]> = {
+  cardano: [
+    'CREATE INDEX IF NOT EXISTS demo_cardano_blocks_height ON odatano_cardano_Blocks (height)',
+    'CREATE INDEX IF NOT EXISTS demo_cardano_blocks_slot ON odatano_cardano_Blocks (slot)',
+    'CREATE INDEX IF NOT EXISTS demo_cardano_blocks_time ON odatano_cardano_Blocks (time)',
+    'CREATE INDEX IF NOT EXISTS demo_cardano_tx_height ON odatano_cardano_Transactions (blockHeight)',
+  ],
+  midnight: [
+    'CREATE INDEX IF NOT EXISTS demo_midnight_blocks_height ON midnight_Blocks (height)',
+    'CREATE INDEX IF NOT EXISTS demo_midnight_blocks_timestamp ON midnight_Blocks (timestamp)',
+    'CREATE INDEX IF NOT EXISTS demo_midnight_tx_block ON midnight_Transactions (block_ID)',
+    'CREATE INDEX IF NOT EXISTS demo_midnight_fees_tx ON midnight_TransactionFees (transaction_ID)',
+    'CREATE INDEX IF NOT EXISTS demo_midnight_results_tx ON midnight_TransactionResults (transaction_ID)',
+  ],
+};
+async function ensureDemoIndexes(chain: Chain, db: any): Promise<void> {
+  for (const sql of DEMO_INDEXES[chain]) await db.run(sql);
+}
+
+/** Poisson-distributed count from the seeded generator (Knuth), capped so one block never explodes. */
+function poisson(lambda: number, cap = 12): number {
+  const L = Math.exp(-lambda);
+  let k = 0, p = 1;
+  do { k++; p *= rnd(); } while (p > L && k <= cap);
+  return Math.min(k - 1, cap);
+}
+
+/** Index into `weights` drawn proportionally to the weight. */
+function weighted(weights: number[]): number {
+  let r = rnd() * weights.reduce((s, w) => s + w, 0);
+  for (let i = 0; i < weights.length; i++) { r -= weights[i]; if (r <= 0) return i; }
+  return weights.length - 1;
+}
+
+/**
+ * Midnight activity is not flat: a daily curve (busy afternoons UTC, quiet
+ * nights), quieter weekends, and a regime that switches every 20–90 minutes –
+ * quiet stretches, transfer waves, an attestation campaign leaning on contract
+ * calls, a burst of deploys. A regime shifts the transaction mix (weights over
+ * every type, never all-or-nothing), the failure share and the fee level
+ * (congestion), so the hourly charts move without jumping to 0 % or 100 %.
+ * The real preprod chain sits at ~0.3 tx per block and 76 % empty blocks; the
+ * demo averages about 0.9 tx per block so the charts have something to show.
+ */
+const TX_TYPES = ['night_transfer', 'shielded_transfer', 'contract_call', 'contract_deploy', 'dust_registration'] as const;
+type Regime = { name: string; meanTx: number; mix: number[]; failure: number; feeFactor: number };
+const REGIMES: Array<Regime & { weight: number }> = [
+  //                                                          transfer shielded call deploy dust
+  { name: 'quiet',     weight: 30, meanTx: 0.35, failure: 0.03, feeFactor: 0.9, mix: [5, 2, 3, 0.3, 2] },
+  { name: 'normal',    weight: 38, meanTx: 0.9,  failure: 0.05, feeFactor: 1.0, mix: [4, 2, 4, 0.6, 1.5] },
+  { name: 'transfers', weight: 12, meanTx: 2.2,  failure: 0.04, feeFactor: 1.2, mix: [8, 4, 2, 0.3, 1] },
+  { name: 'campaign',  weight: 12, meanTx: 3.5,  failure: 0.09, feeFactor: 1.6, mix: [2, 2, 9, 0.8, 0.5] },
+  { name: 'deploys',   weight: 8,  meanTx: 1.4,  failure: 0.07, feeFactor: 1.3, mix: [3, 1, 4, 4, 0.5] },
+];
+const pickRegime = (): Regime => REGIMES[weighted(REGIMES.map(r => r.weight))];
+/** 0.6 at 02:00 UTC up to 1.4 at 14:00 UTC, and weekends at 70 %. */
+function activityFactor(tMs: number): number {
+  const hour = (tMs / 3600_000) % 24;
+  const weekday = new Date(tMs).getUTCDay();
+  const weekend = weekday === 0 || weekday === 6 ? 0.7 : 1;
+  return weekend * (1 + 0.4 * Math.sin(((hour - 8) / 24) * 2 * Math.PI));
+}
+
+/**
+ * A fixed validator set with a skewed stake distribution (Zipf-like), so the
+ * block-producer ranking shows a real top 10 share, Nakamoto coefficient and
+ * Gini instead of one block per random author.
+ */
+const VALIDATORS = Array.from({ length: 40 }, () => hex(64));
+const VALIDATOR_WEIGHTS = VALIDATORS.map((_, i) => 1 / Math.pow(i + 1, 0.8));
+/** A handful of contracts carries most calls; deploys create fresh addresses. */
+const CONTRACTS = Array.from({ length: 24 }, () => hex(64));
+const CONTRACT_WEIGHTS = CONTRACTS.map((_, i) => 1 / Math.pow(i + 1, 1.1));
+const CIRCUITS = ['attest', 'anchor', 'grantDisclosure', 'proveOwnership', 'proveFieldPredicate', 'issueLicense', 'revokeDisclosure', 'anchorBatch'];
+const CIRCUIT_WEIGHTS = [10, 6, 4, 3, 3, 2, 1, 1];
 
 async function seedCardano() {
   const db = await connectSource('cardano');
@@ -93,6 +188,7 @@ async function seedCardano() {
     lastSlot: slot, lastBlockHash: prevHash, lastHeight: height, lastIndexedAt: new Date().toISOString(),
     tipSlot: slot, tipHeight: height, syncStatus: 'synced', consecutiveErrors: 0, desiredRunning: true,
   }));
+  await ensureDemoIndexes('cardano', db);
   console.log(`[cardano] +${blocks} blocks, +${txs} tx → tip ${height}`);
 }
 
@@ -126,42 +222,59 @@ async function seedMidnight() {
     console.log(`[midnight] reorg: rolled back to ${fork}`);
   }
   let blocks = 0, txs = 0;
-  const TX_TYPES = ['night_transfer', 'shielded_transfer', 'contract_call', 'contract_call', 'contract_deploy', 'dust_registration'];
+  let regime = pickRegime(), regimeUntil = t + between(20, 90) * 60_000;
+  const regimeBlocks: Record<string, number> = {};
+  // Rows are collected and written in batches: 35 days are half a million
+  // blocks, and one INSERT per block would take the better part of an hour.
+  let blockRows: any[] = [], txRows: any[] = [], feeRows: any[] = [], resRows: any[] = [];
+  const flush = async () => {
+    if (blockRows.length) await db.run(INSERT.into('midnight.Blocks').entries(blockRows));
+    if (txRows.length) await db.run(INSERT.into('midnight.Transactions').entries(txRows));
+    if (feeRows.length) await db.run(INSERT.into('midnight.TransactionFees').entries(feeRows));
+    if (resRows.length) await db.run(INSERT.into('midnight.TransactionResults').entries(resRows));
+    blockRows = []; txRows = []; feeRows = []; resRows = [];
+  };
   while (t < nowMs - 6000) {
     t += between(5000, 7000); height++;
+    if (t >= regimeUntil) { regime = pickRegime(); regimeUntil = t + between(20, 90) * 60_000; }
+    regimeBlocks[regime.name] = (regimeBlocks[regime.name] ?? 0) + 1;
     const id = uuid(), hash = hex(64);
-    await db.run(INSERT.into('midnight.Blocks').entries({
-      ID: id, hash, height, protocolVersion: 1, timestamp: t, author: hex(64), ledgerParameters: hex(16), parent_ID: prevId,
-    }));
-    const n = rnd() < 0.35 ? 0 : between(1, 5);
-    const txRows: any[] = [], feeRows: any[] = [], resRows: any[] = [];
+    blockRows.push({
+      ID: id, hash, height, protocolVersion: 1, timestamp: t, author: VALIDATORS[weighted(VALIDATOR_WEIGHTS)],
+      ledgerParameters: hex(16), parent_ID: prevId,
+    });
+    const n = poisson(regime.meanTx * activityFactor(t));
     // one SYSTEM extrinsic per block (timestamp inherent) – must not count as a transaction
     txRows.push({ ID: uuid(), transactionId: 0, hash: hex(64), protocolVersion: 1, transactionType: 'SYSTEM', txType: 'system', isShielded: false, hasProof: false, size: 12, block_ID: id });
     for (let i = 1; i <= n; i++) {
       const txId = uuid();
-      const txType = TX_TYPES[between(0, TX_TYPES.length - 1)];
+      const txType = TX_TYPES[weighted(regime.mix)];
       const shielded = txType === 'shielded_transfer';
-      const est = between(60_000_000, 300_000_000); // specks: real fees sit around 1e8 (0.1 µDUST)
+      const call = txType === 'contract_call', deploy = txType === 'contract_deploy';
+      // specks: real fees sit around 1e8 (0.1 µDUST); a busy regime pays more (congestion)
+      const est = Math.round(between(60_000_000, 300_000_000) * regime.feeFactor);
       const paid = Math.max(1_000_000, est + between(-30_000_000, 45_000_000));
       txRows.push({
         ID: txId, transactionId: i, hash: hex(64), protocolVersion: 1, transactionType: 'REGULAR', txType,
-        isShielded: shielded, hasProof: shielded || txType.startsWith('contract'), size: between(400, 9000),
-        contractAddress: txType.startsWith('contract') ? hex(64) : null, circuitName: txType === 'contract_call' ? 'attest' : null, block_ID: id,
+        isShielded: shielded, hasProof: shielded || call || deploy, size: call || deploy ? between(2000, 9000) : between(400, 2500),
+        contractAddress: call ? CONTRACTS[weighted(CONTRACT_WEIGHTS)] : deploy ? hex(64) : null,
+        circuitName: call ? CIRCUITS[weighted(CIRCUIT_WEIGHTS)] : null, block_ID: id,
       });
       feeRows.push({ ID: uuid(), paidFees: String(paid), estimatedFees: String(est), transaction_ID: txId });
-      resRows.push({ ID: uuid(), status: rnd() < 0.05 ? 'FAILURE' : 'SUCCESS', outcomeSource: 'substrate-system-events', transaction_ID: txId });
+      resRows.push({ ID: uuid(), status: rnd() < regime.failure ? 'FAILURE' : 'SUCCESS', outcomeSource: 'substrate-system-events', transaction_ID: txId });
     }
-    await db.run(INSERT.into('midnight.Transactions').entries(txRows));
-    if (feeRows.length) await db.run(INSERT.into('midnight.TransactionFees').entries(feeRows));
-    if (resRows.length) await db.run(INSERT.into('midnight.TransactionResults').entries(resRows));
     prevHash = hash; prevId = id; blocks++; txs += n;
+    if (blockRows.length >= 500) await flush();
   }
+  await flush();
   await db.run(UPSERT.into('midnight.SyncState').entries({
     ID: 'SINGLETON', networkId: 'preprod', lastIndexedHeight: height, lastIndexedHash: prevHash, lastIndexedAt: new Date().toISOString(),
     lastFinalizedHeight: height, lastFinalizedHash: prevHash, nodeUrl: 'wss://demo', chainHeight: height + 2, syncStatus: 'synced',
     reorgGeneration: 0, syncProgress: 100, blocksPerSecond: 0.17, consecutiveErrors: 0,
   }));
-  console.log(`[midnight] +${blocks} blocks, +${txs} tx → tip ${height}`);
+  await ensureDemoIndexes('midnight', db);
+  const regimes = Object.entries(regimeBlocks).map(([k, v]) => `${k} ${v}`).join(', ');
+  console.log(`[midnight] +${blocks} blocks, +${txs} tx → tip ${height}${regimes ? ` (regimes: ${regimes})` : ''}`);
 }
 
 loadSourceModel('cardano'); // warm

@@ -17,6 +17,20 @@ const KOIOS: Record<string, string> = {
   mainnet: 'https://api.koios.rest/api/v1',
 };
 
+/**
+ * Independent references per chain and network. Koios indexes Cardano only, so a
+ * Midnight network of the same name has none; no public Midnight indexer answers
+ * hash, tx count, size and fees per block.
+ */
+const REFERENCES: Partial<Record<Chain, Record<string, string>>> = {
+  cardano: KOIOS,
+};
+
+/** Whether a chain on a network has an independent reference to check against. */
+export function hasReference(chain: Chain, network: string | null | undefined): boolean {
+  return !!(network && REFERENCES[chain]?.[network]);
+}
+
 /** Koios answers at most this many hashes per call. */
 const BATCH = 50;
 
@@ -92,13 +106,13 @@ export async function verifySample(
 ): Promise<VerificationResult> {
   const t0 = Date.now();
   const ranAt = now.toISOString();
-  const base = KOIOS[network];
+  const base = REFERENCES[chain]?.[network];
   const blank = (error: string): VerificationResult => ({
-    chain, reference: `koios:${network}`, samples: 0, checked: 0, mismatches: [],
+    chain, reference: base ? `koios:${network}` : 'none', samples: 0, checked: 0, mismatches: [],
     fromHeight: 0, toHeight: 0, durationMs: Date.now() - t0, ranAt, error,
   });
 
-  if (!base) return blank(`no independent reference configured for network '${network}'`);
+  if (!base) return blank(`no independent reference configured for chain '${chain}' on network '${network}'`);
 
   const tip = await source.getTip();
   const start = await source.getCrawlStartHeight();

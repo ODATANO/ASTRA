@@ -81,6 +81,21 @@ export const DAILY_VIEWS: Record<string, DailyView> = {
       { name: 'burns', metric: 'tokens.burns', stat: 'sum' },
     ],
   },
+  StakeDaily: {
+    columns: [
+      { name: 'stakeRegistrations', metric: 'certs.stakeRegistrations', stat: 'sum' },
+      { name: 'stakeDeregistrations', metric: 'certs.stakeDeregistrations', stat: 'sum' },
+      { name: 'poolDelegations', metric: 'certs.poolDelegations', stat: 'sum' },
+      { name: 'voteDelegations', metric: 'certs.voteDelegations', stat: 'sum' },
+      { name: 'poolRegistrations', metric: 'certs.poolRegistrations', stat: 'sum' },
+      { name: 'poolRetirements', metric: 'certs.poolRetirements', stat: 'sum' },
+      { name: 'drepRegistrations', metric: 'certs.drepRegistrations', stat: 'sum' },
+      { name: 'drepRetirements', metric: 'certs.drepRetirements', stat: 'sum' },
+      { name: 'otherCertificates', metric: 'certs.other', stat: 'sum' },
+      { name: 'withdrawals', metric: 'withdrawals.count', stat: 'sum' },
+      { name: 'withdrawnAda', metric: 'withdrawals.value', stat: 'sum' },
+    ],
+  },
 };
 
 export interface DailyRow extends Record<string, unknown> {

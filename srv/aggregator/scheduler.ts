@@ -8,7 +8,7 @@
  */
 import cds from '@sap/cds';
 import type { Chain, ChainSource } from '../sources/types';
-import { configuredChains, openChainSource } from '../sources';
+import { configuredChains, openChainSource, reopenChainSource } from '../sources';
 import { ChainAggregator } from './engine';
 
 export interface AstraConfig {
@@ -17,6 +17,13 @@ export interface AstraConfig {
   startTime: string;
   retention: { minuteHours: number; hourDays: number };
   cycleBudgetMs?: number;
+  /**
+   * A cycle that has not returned after this long is given up: its error is
+   * recorded on the cursor, the source connection is reopened and the chain is
+   * rescheduled. Default: six budgets, at least two minutes. Guards against a
+   * source connection that stops answering.
+   */
+  cycleTimeoutMs?: number;
 }
 
 export function astraConfig(): AstraConfig {
@@ -31,7 +38,29 @@ export function astraConfig(): AstraConfig {
       hourDays: Number(env.ASTRA_RETENTION_HOUR_DAYS || c.retention?.hourDays || 90),
     },
     cycleBudgetMs: Number(env.ASTRA_CYCLE_BUDGET_MS || c.cycleBudgetMs || 20000),
+    cycleTimeoutMs: Number(env.ASTRA_CYCLE_TIMEOUT_MS || c.cycleTimeoutMs || 0) || undefined,
   };
+}
+
+/** The effective give-up time for one cycle. */
+export function cycleTimeoutMs(cfg: Pick<AstraConfig, 'cycleBudgetMs' | 'cycleTimeoutMs'>): number {
+  return cfg.cycleTimeoutMs ?? Math.max(120_000, (cfg.cycleBudgetMs ?? 20000) * 6);
+}
+
+export class CycleTimeoutError extends Error {
+  constructor(readonly chain: Chain, readonly afterMs: number) {
+    super(`[${chain}] cycle did not return within ${afterMs} ms`);
+    this.name = 'CycleTimeoutError';
+  }
+}
+
+/** Resolves with the cycle's result, or rejects with CycleTimeoutError once `timeoutMs` passed without one. */
+export function withCycleTimeout<T>(chain: Chain, cycle: Promise<T>, timeoutMs: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const t = setTimeout(() => reject(new CycleTimeoutError(chain, timeoutMs)), timeoutMs);
+    t.unref?.();
+    cycle.then(v => { clearTimeout(t); resolve(v); }, e => { clearTimeout(t); reject(e); });
+  });
 }
 
 const LOG = cds.log('astra');
@@ -93,13 +122,27 @@ async function tick(chain: Chain, cfg: AstraConfig): Promise<void> {
   if (!agg || stopping) return;
   let delay = cfg.pollMs;
   const run = (async () => {
+    const cycle = agg.runCycle(cfg.cycleBudgetMs);
+    cycle.catch(() => undefined); // an abandoned cycle's late rejection is reported where it happened
     try {
-      const r = await agg.runCycle(cfg.cycleBudgetMs);
+      const r = await withCycleTimeout(chain, cycle, cycleTimeoutMs(cfg));
       if (r.skipped === 'no-lease') delay = cfg.pollMs * 3;
       else if (!r.caughtUp && !r.skipped) delay = 50; // backfilling: keep going
       if (r.chunks) LOG.info(`[${chain}] +${r.blocks} blocks, +${r.txs} tx (${r.fromHeight}..${r.toHeight}) in ${r.ms} ms${r.caughtUp ? '' : ' – backfilling'}${r.reorgs ? `, ${r.reorgs} reorg(s)` : ''}`);
-    } catch {
+    } catch (e) {
       delay = Math.min(cfg.pollMs * 6, 60000);
+      if (e instanceof CycleTimeoutError) {
+        // The cycle is still "running" on a connection that does not answer. Fence it off,
+        // say so on the cursor, and read through a fresh connection next time.
+        agg.abandonCycle();
+        LOG.error(`${e.message}; abandoning it and reopening the ${chain} source`);
+        await agg.noteFailure(e.message);
+        try {
+          agg.replaceSource(await reopenChainSource(chain));
+        } catch (re: any) {
+          LOG.error(`[${chain}] source could not be reopened: ${re?.message ?? re}`);
+        }
+      }
     }
   })();
   inFlight.set(chain, run);

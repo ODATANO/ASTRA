@@ -16,8 +16,10 @@ import { getLeaderboard } from '../srv/aggregator/leaderboards';
 import { applyEpochSnapshots } from '../srv/aggregator/epoch-snapshots';
 import { getConcentration, gini, nakamoto } from '../srv/aggregator/concentration';
 import { getDistribution } from '../srv/aggregator/distribution';
-import { sampleHeights, verifySample } from '../srv/verification/sampling';
-import { prune } from '../srv/aggregator/store';
+import { hasReference, sampleHeights, verifySample } from '../srv/verification/sampling';
+import { CycleTimeoutError, cycleTimeoutMs, withCycleTimeout } from '../srv/aggregator/scheduler';
+import { applyEntityDeltas, prune } from '../srv/aggregator/store';
+import { addToEntity, type EntityDeltaMap } from '../srv/aggregator/samples';
 
 const { INSERT, UPSERT, SELECT, DELETE } = cds.ql;
 const hex = (n: number) => Array.from({ length: n }, (_, i) => ((i * 7 + n) % 16).toString(16)).join('');
@@ -379,6 +381,87 @@ describe('token metrics and leaderboards', () => {
   });
 });
 
+describe('start height while the source backfills', () => {
+  it('ignores header-only rows above the crawl cursor when looking for the start time', async () => {
+    resetSourceCache();
+    const db = await connectSource('cardano', sqliteFile('cardano-stubs.sqlite'));
+    await cds.db.run(DELETE.from('odatano.astra.ChainCursors').where({ chain: 'cardano' }));
+    await cds.db.run(DELETE.from('odatano.astra.MetricBuckets').where({ chain: 'cardano' }));
+    // an old crawl range (a year back), cursor at its end
+    const oldSec = Math.floor(now / 1000) - 365 * 86400;
+    await seedCardano(db, 500, 10, oldSec);
+    // a tip row far ahead with a current time, as the source writes at the chain tip
+    await db.run(INSERT.into('odatano.cardano.Blocks').entries({ hash: 'stub'.padEnd(64, '0'), time: new Date(now).toISOString(), height: 90000, slot: 90000 * 20, size: 0, txCount: 0 }));
+
+    const agg = new ChainAggregator('cardano', new CardanoSource(db), {
+      chunkBlocks: 50, startTime: new Date(now - 30 * 86400_000).toISOString(), leaseMs: 60000,
+      retention: { minuteHours: 48, hourDays: 90 }, log: { info() {}, warn() {} },
+    });
+    const r = await agg.runCycle(60000);
+    expect(r.skipped).toBeUndefined();
+    // the start time lies past the crawled range, so the crawl start is taken, not the stub
+    expect((await agg.getCursor())?.startHeight).toBe(500);
+    expect((await agg.getCursor())?.lastHeight).toBe(509);
+  });
+});
+
+describe('certificates and withdrawals', () => {
+  const POOL_A = 'pool1' + 'a'.repeat(50), POOL_B = 'pool1' + 'b'.repeat(50);
+  const DREP = 'drep1' + 'c'.repeat(50);
+  const STAKE = 'stake_test1' + 'd'.repeat(50);
+
+  it('counts each certificate kind, ranks delegation targets and sums withdrawals in ADA', async () => {
+    resetSourceCache();
+    const db = await connectSource('cardano', sqliteFile('cardano-certs.sqlite'));
+    await cds.db.run(DELETE.from('odatano.astra.ChainCursors').where({ chain: 'cardano' }));
+    await cds.db.run(DELETE.from('odatano.astra.MetricBuckets').where({ chain: 'cardano' }));
+    await cds.db.run(DELETE.from('odatano.astra.EntityBuckets').where({ chain: 'cardano' }));
+
+    const startSec = Math.floor(now / 3600000) * 3600 - 3600;
+    const lastTime = await seedCardano(db, 9000, 6, startSec);   // 6 blocks, tx hashes `<hash>-<i>` on the non-empty ones
+    const txs: any[] = await db.run(SELECT.from('odatano.cardano.Transactions').columns('hash').orderBy('blockHeight asc', 'txIndex asc'));
+    const [t0, t1, t2, t3] = txs.map(t => String(t.hash));
+    await db.run(INSERT.into('odatano.cardano.TransactionCertificates').entries([
+      { tx_hash: t0, certIndex: 0, kind: 'stake_registration', stakeAddress: STAKE, deposit: '2000000' },
+      // one Conway certificate: pool and vote delegation share the index, two rows
+      { tx_hash: t0, certIndex: 1, kind: 'pool_delegation', stakeAddress: STAKE, poolId: POOL_A },
+      { tx_hash: t0, certIndex: 1, kind: 'vote_delegation', stakeAddress: STAKE, drepId: DREP },
+      { tx_hash: t1, certIndex: 0, kind: 'pool_delegation', stakeAddress: STAKE, poolId: POOL_A },
+      { tx_hash: t2, certIndex: 0, kind: 'pool_delegation', stakeAddress: STAKE, poolId: POOL_B },
+      { tx_hash: t2, certIndex: 1, kind: 'vote_delegation', stakeAddress: STAKE, drepId: 'drep_always_abstain' },
+      { tx_hash: t3, certIndex: 0, kind: 'pool_retirement', poolId: POOL_B, epoch: 500 },
+      { tx_hash: t3, certIndex: 1, kind: 'committee_hot_auth' },
+    ]));
+    await db.run(INSERT.into('odatano.cardano.TransactionWithdrawals').entries([
+      { tx_hash: t1, stakeAddress: STAKE, lovelace: '1500000' },
+      { tx_hash: t3, stakeAddress: STAKE, lovelace: '2500000' },
+    ]));
+
+    const agg = new ChainAggregator('cardano', new CardanoSource(db), {
+      chunkBlocks: 4, startTime: new Date((startSec - 60) * 1000).toISOString(), leaseMs: 60000,
+      retention: { minuteHours: 48, hourDays: 90 }, log: { info() {}, warn() {} },
+    });
+    const r = await agg.runCycle(60000);
+    expect(r.blocks).toBe(6);
+
+    const at = lastTime * 1000;
+    const count = async (m: string) => (await computeWindow(cds.db, 'cardano', m, '24h', at)).count;
+    expect(await count('certs.stakeRegistrations')).toBe(1);
+    expect(await count('certs.poolDelegations')).toBe(3);
+    expect(await count('certs.voteDelegations')).toBe(2);
+    expect(await count('certs.poolRetirements')).toBe(1);
+    expect(await count('certs.other')).toBe(1);
+    expect(await count('withdrawals.count')).toBe(2);
+    expect((await computeWindow(cds.db, 'cardano', 'withdrawals.value', '24h', at)).sum).toBeCloseTo(4, 6);
+
+    const pools = await getLeaderboard(cds.db, 'cardano', 'pool', 'stake.delegations', '24h', 10, 'count', at);
+    expect(pools.rows.map(x => [x.entityId, x.count])).toEqual([[POOL_A, 2], [POOL_B, 1]]);
+    const dreps = await getLeaderboard(cds.db, 'cardano', 'drep', 'governance.voteDelegations', '24h', 10, 'count', at);
+    expect(dreps.entities).toBe(2);
+    expect(dreps.rows.map(x => x.entityId).sort()).toEqual([DREP, 'drep_always_abstain'].sort());
+  });
+});
+
 describe('stake and governance from epoch snapshots', () => {
   it('ranks pools and DReps from the newest epoch, and records the chain-wide gauges', async () => {
     resetSourceCache();
@@ -520,5 +603,107 @@ describe('sampled verification against an independent indexer', () => {
 
     const unknownNet = await verifySample(cds.db, dead as any, 'cardano', 'sanchonet', 10);
     expect(unknownNet.error).toContain('sanchonet');
+  });
+
+  it('has no reference for Midnight: Koios indexes Cardano, a same-named network is another chain', async () => {
+    expect(hasReference('cardano', 'preprod')).toBe(true);
+    expect(hasReference('midnight', 'preprod')).toBe(false);
+    expect(hasReference('cardano', null)).toBe(false);
+
+    const midnight = {
+      chain: 'midnight' as const,
+      getTip: async () => ({ height: 5000, network: 'preprod' }),
+      getCrawlStartHeight: async () => 1,
+      findFirstHeightAt: async () => null,
+      getBlocks: async () => { throw new Error('must not read blocks without a reference'); },
+      getTransactions: async () => [],
+      getReorgsAfter: async () => [],
+    };
+    const r = await verifySample(cds.db, midnight as any, 'midnight', 'preprod', 10);
+    expect(r.error).toContain("chain 'midnight'");
+    expect(r.reference).toBe('none');
+    expect(r.samples).toBe(0);
+  });
+});
+
+describe('a cycle the scheduler gives up on', () => {
+  it('rejects with the timeout while the cycle hangs, and passes a result that arrives in time', async () => {
+    const hung = new Promise<never>(() => { /* never settles: a pool that stopped answering */ });
+    await expect(withCycleTimeout('cardano', hung, 20)).rejects.toBeInstanceOf(CycleTimeoutError);
+    await expect(withCycleTimeout('cardano', Promise.resolve('ok'), 1000)).resolves.toBe('ok');
+    expect(cycleTimeoutMs({ cycleBudgetMs: 20000 })).toBe(120_000);
+    expect(cycleTimeoutMs({ cycleBudgetMs: 60000 })).toBe(360_000);
+    expect(cycleTimeoutMs({ cycleBudgetMs: 20000, cycleTimeoutMs: 5000 })).toBe(5000);
+  });
+
+  it('stops an abandoned cycle before its next write, so a late comeback cannot double-count', async () => {
+    // the shared aggregate database still carries the cardano cursor of the earlier cases
+    await cds.db.run(DELETE.from('odatano.astra.ChainCursors').where({ chain: 'cardano' }));
+    await cds.db.run(DELETE.from('odatano.astra.MetricBuckets').where({ chain: 'cardano' }));
+    await cds.db.run(DELETE.from('odatano.astra.EntityBuckets').where({ chain: 'cardano' }));
+    const db = await connectSource('cardano', sqliteFile('cardano-abandon.sqlite'));
+    const startSec = Math.floor(now / 60000) * 60 - 7200;
+    await seedCardano(db, 100, 120, startSec);
+    const source = new CardanoSource(db);
+    const agg = new ChainAggregator('cardano', source, {
+      chunkBlocks: 40, startTime: new Date((startSec - 60) * 1000).toISOString(), leaseMs: 60000,
+      retention: { minuteHours: 48, hourDays: 90 }, log: { info() {}, warn() {} },
+    });
+    // The second chunk read never returns; the scheduler gives up meanwhile.
+    const realGetBlocks = source.getBlocks.bind(source);
+    let reads = 0;
+    let release!: () => void;
+    const gate = new Promise<void>(res => { release = res; });
+    source.getBlocks = async (from: number, to: number) => {
+      reads++;
+      if (reads === 2) { await gate; }
+      return realGetBlocks(from, to);
+    };
+    const cycle = agg.runCycle(60000);
+    await new Promise(r => setTimeout(r, 50));
+    agg.abandonCycle();
+    await agg.noteFailure('cycle did not return');
+    release();                       // the connection "comes back" after the scheduler moved on
+    await expect(cycle).rejects.toThrow(/abandoned/);
+
+    const cursor = await agg.getCursor();
+    expect(cursor?.lastHeight).toBe(139);         // only the first chunk of 40 was written
+    expect(cursor?.lastError).toContain('abandoned');   // the late failure is what the cursor reports last
+
+    // A fresh cycle carries on from there and finishes the range.
+    const r = await agg.runCycle(60000);
+    expect(r.skipped).toBeUndefined();
+    expect((await agg.getCursor())?.lastHeight).toBe(219);
+  });
+});
+
+describe('entity buckets', () => {
+  it('adds deltas to hour and day rows in the database, including rows written through CAP', async () => {
+    await cds.db.run(DELETE.from('odatano.astra.EntityBuckets').where({ chain: 'midnight' }));
+    const day = Date.UTC(2024, 0, 10);
+    // a row written by CAP itself, so the additive upsert must hit the same key
+    await cds.db.run(UPSERT.into('odatano.astra.EntityBuckets').entries({
+      chain: 'midnight', dimension: 'address', entityId: 'a', subjectId: '', metricId: 'value.received',
+      granularity: 'day', bucketStart: new Date(day).toISOString(), count: 1, sum: '5', fromHeight: 5, toHeight: 5,
+    }));
+
+    const first: EntityDeltaMap = new Map();
+    addToEntity(first, 'address', 'a', 'value.received', day / 1000 + 3600, 10, 10);
+    addToEntity(first, 'address', 'a', 'value.received', day / 1000 + 3700, 2.5, 11);
+    expect(await applyEntityDeltas(cds.db, 'midnight', first)).toBe(2); // one hour row, one day row
+
+    const second: EntityDeltaMap = new Map();
+    addToEntity(second, 'address', 'a', 'value.received', day / 1000 + 3800, 1, 12);
+    addToEntity(second, 'address', 'a', 'value.received', day / 1000 + 7200, 4, 20);
+    await applyEntityDeltas(cds.db, 'midnight', second);
+
+    const rows = await cds.db.run(SELECT.from('odatano.astra.EntityBuckets').where({ chain: 'midnight' }).orderBy('granularity', 'bucketStart'));
+    // Integer64 and Decimal come back as strings
+    const nums = (r: any) => ({ count: Number(r.count), sum: Number(r.sum), fromHeight: Number(r.fromHeight), toHeight: Number(r.toHeight) });
+    const byKey = Object.fromEntries(rows.map((r: any) => [`${r.granularity}@${new Date(r.bucketStart).getTime() - day}`, nums(r)]));
+    expect(rows).toHaveLength(3);
+    expect(byKey['hour@3600000']).toEqual({ count: 3, sum: 13.5, fromHeight: 10, toHeight: 12 });
+    expect(byKey['hour@7200000']).toEqual({ count: 1, sum: 4, fromHeight: 20, toHeight: 20 });
+    expect(byKey['day@0']).toEqual({ count: 5, sum: 22.5, fromHeight: 5, toHeight: 20 });
   });
 });

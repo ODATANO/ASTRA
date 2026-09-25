@@ -163,79 +163,68 @@ export async function applyDeltas(tx: any, chain: Chain, deltas: DeltaMap, now =
 // Entity buckets (leaderboards)
 // ---------------------------------------------------------------------------
 
-const entityKey = (r: { dimension: string; entityId: string; subjectId?: string; metricId: string }, startMs: number) =>
-  `${r.dimension}|${r.entityId}|${r.subjectId ?? ''}|${r.metricId}|${startMs}`;
+const ENTITY_COLS = ['chain', 'dimension', 'entityId', 'subjectId', 'metricId', 'granularity', 'bucketStart', 'count', 'sum', 'fromHeight', 'toHeight', 'computedAt'];
+const ENTITY_KEY = 'chain, dimension, entityId, metricId, granularity, bucketStart';
 
-async function readEntityRows(tx: any, chain: Chain, granularity: Granularity, fromMs: number, toMsExclusive: number): Promise<any[]> {
-  return await tx.run(
-    SELECT.from(ENTITIES)
-      .where({ chain, granularity })
-      .where({ bucketStart: { '>=': iso(fromMs) } })
-      .where({ bucketStart: { '<': iso(toMsExclusive) } }),
-  );
-}
+// Rows travel as one JSON parameter, so the statement text is fixed for any row count.
+const ENTITY_ADD_SQL: Record<string, string> = {
+  postgres: `INSERT INTO odatano_astra_EntityBuckets AS t (${ENTITY_COLS.join(', ')})
+    SELECT v->>'chain', v->>'dimension', v->>'entityId', v->>'subjectId', v->>'metricId', v->>'granularity',
+      (v->>'bucketStart')::timestamp, (v->>'count')::bigint, (v->>'sum')::numeric,
+      (v->>'fromHeight')::bigint, (v->>'toHeight')::bigint, (v->>'computedAt')::timestamp
+    FROM jsonb_array_elements($1::jsonb) v
+    ON CONFLICT (${ENTITY_KEY}) DO UPDATE SET
+      count = COALESCE(t.count, 0) + EXCLUDED.count,
+      sum = COALESCE(t.sum, 0) + EXCLUDED.sum,
+      fromHeight = LEAST(t.fromHeight, EXCLUDED.fromHeight),
+      toHeight = GREATEST(t.toHeight, EXCLUDED.toHeight),
+      computedAt = EXCLUDED.computedAt`,
+  sqlite: `INSERT INTO odatano_astra_EntityBuckets (${ENTITY_COLS.join(', ')})
+    SELECT ${ENTITY_COLS.map(c => `json_extract(value, '$.${c}')`).join(', ')}
+    FROM json_each(?) WHERE true
+    ON CONFLICT (${ENTITY_KEY}) DO UPDATE SET
+      count = COALESCE(count, 0) + excluded.count,
+      sum = COALESCE(sum, 0) + excluded.sum,
+      fromHeight = MIN(COALESCE(fromHeight, excluded.fromHeight), excluded.fromHeight),
+      toHeight = MAX(COALESCE(toHeight, excluded.toHeight), excluded.toHeight),
+      computedAt = excluded.computedAt`,
+};
 
 /**
- * Writes entity deltas at hour granularity only; day rows are rebuilt from the hours by
- * rollupEntityDays() once per cycle (merging per chunk would re-read every entity row of the day).
+ * Adds entity deltas to their hour and day rows in the database, one statement per chunk and
+ * no read: the cost follows the number of changed rows, not the size of the day.
  */
 export async function applyEntityDeltas(tx: any, chain: Chain, entities: EntityDeltaMap, now = new Date().toISOString()): Promise<number> {
   if (entities.size === 0) return 0;
-  let lo = Number.POSITIVE_INFINITY, hi = Number.NEGATIVE_INFINITY;
-  for (const e of entities.values()) {
-    if (e.bucketStart < lo) lo = e.bucketStart;
-    if (e.bucketStart > hi) hi = e.bucketStart;
-  }
-  const existing = await readEntityRows(tx, chain, 'hour', lo, hi + GRAN_MS.hour);
-  const byKey = new Map<string, any>();
-  for (const r of existing) byKey.set(entityKey(r, parseMs(r.bucketStart) ?? 0), r);
+  const sql = ENTITY_ADD_SQL[String(cds.db?.kind ?? 'sqlite')];
+  if (!sql) throw new Error(`entity buckets: no additive upsert for database kind ${cds.db?.kind}`);
 
-  const rows: Record<string, unknown>[] = [];
+  const rows = new Map<string, Record<string, any>>();
   for (const e of entities.values()) {
-    const prev = byKey.get(entityKey(e, e.bucketStart));
-    const count = Number(prev?.count ?? 0) + e.count;
-    const sum = Number(prev?.sum ?? 0) + e.sum;
-    const fromHeight = prev ? Math.min(Number(prev.fromHeight), e.fromHeight) : e.fromHeight;
-    const toHeight = prev ? Math.max(Number(prev.toHeight), e.toHeight) : e.toHeight;
-    rows.push({
-      chain, dimension: e.dimension, entityId: e.entityId, subjectId: e.subjectId ?? '', metricId: e.metricId,
-      granularity: 'hour', bucketStart: iso(e.bucketStart),
-      count, sum: dec(sum), fromHeight, toHeight, computedAt: now,
-    });
-  }
-  await upsertRows(tx, rows, ENTITIES);
-  return rows.length;
-}
-
-/** Rebuilds the day rows of the given days from their hour rows. */
-export async function rollupEntityDays(tx: any, chain: Chain, dayStarts: number[], now = new Date().toISOString()): Promise<number> {
-  let written = 0;
-  for (const start of dayStarts) {
-    const hours = await readEntityRows(tx, chain, 'hour', start, start + GRAN_MS.day);
-    if (!hours.length) continue;
-    const per = new Map<string, Record<string, unknown>>();
-    for (const h of hours) {
-      const key = `${h.dimension}|${h.entityId}|${h.subjectId ?? ''}|${h.metricId}`;
-      const prev = per.get(key);
+    for (const granularity of ['hour', 'day'] as const) {
+      const start = bucketStart(e.bucketStart, granularity);
+      const key = `${e.dimension}|${e.entityId}|${e.metricId}|${granularity}|${start}`;
+      const prev = rows.get(key);
       if (!prev) {
-        per.set(key, {
-          chain, dimension: h.dimension, entityId: h.entityId, subjectId: h.subjectId ?? '', metricId: h.metricId,
-          granularity: 'day', bucketStart: iso(start),
-          count: Number(h.count), sum: Number(h.sum ?? 0),
-          fromHeight: Number(h.fromHeight), toHeight: Number(h.toHeight), computedAt: now,
+        rows.set(key, {
+          chain, dimension: e.dimension, entityId: e.entityId, subjectId: e.subjectId ?? '', metricId: e.metricId,
+          granularity, bucketStart: iso(start), count: e.count, sum: e.sum,
+          fromHeight: e.fromHeight, toHeight: e.toHeight, computedAt: now,
         });
         continue;
       }
-      prev.count = Number(prev.count) + Number(h.count);
-      prev.sum = Number(prev.sum) + Number(h.sum ?? 0);
-      prev.fromHeight = Math.min(Number(prev.fromHeight), Number(h.fromHeight));
-      prev.toHeight = Math.max(Number(prev.toHeight), Number(h.toHeight));
+      prev.count += e.count;
+      prev.sum += e.sum;
+      prev.fromHeight = Math.min(prev.fromHeight, e.fromHeight);
+      prev.toHeight = Math.max(prev.toHeight, e.toHeight);
     }
-    const rows = [...per.values()].map(r => ({ ...r, sum: dec(Number(r.sum)) }));
-    await upsertRows(tx, rows, ENTITIES);
-    written += rows.length;
   }
-  return written;
+  const all = [...rows.values()].map(r => ({ ...r, sum: dec(r.sum) }));
+  const CHUNK = 2000;
+  for (let i = 0; i < all.length; i += CHUNK) {
+    await tx.run(sql, [JSON.stringify(all.slice(i, i + CHUNK))]);
+  }
+  return all.length;
 }
 
 /**

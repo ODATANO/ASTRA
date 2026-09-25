@@ -28,6 +28,19 @@ cardano;stake.pools;Stake pools;gauge;chain;pools;Pools in the latest epoch snap
 cardano;stake.totalLive;Total live stake;gauge;chain;ADA;Live stake across all pools in the latest epoch snapshot
 cardano;governance.dreps;Active DReps;gauge;chain;dreps;DReps in the latest snapshot that are neither retired nor expired
 cardano;governance.totalPower;Total voting power;gauge;chain;ADA;Voting power across all DReps in the latest epoch snapshot
+cardano;certs.stakeRegistrations;Stake registrations;counter;chain;certs;Stake key registration certificates (needs the source's certificate crawl)
+cardano;certs.stakeDeregistrations;Stake deregistrations;counter;chain;certs;Stake key deregistration certificates
+cardano;certs.poolDelegations;Pool delegations;counter;chain;certs;Stake delegation certificates to a pool; a Conway stake+vote delegation counts here and as a vote delegation
+cardano;certs.voteDelegations;Vote delegations;counter;chain;certs;Vote delegation certificates to a DRep, always-abstain or no-confidence
+cardano;certs.poolRegistrations;Pool registrations;counter;chain;certs;Pool registration and update certificates
+cardano;certs.poolRetirements;Pool retirements;counter;chain;certs;Pool retirement certificates
+cardano;certs.drepRegistrations;DRep registrations;counter;chain;certs;DRep registration and update certificates
+cardano;certs.drepRetirements;DRep retirements;counter;chain;certs;DRep retirement certificates
+cardano;certs.other;Other certificates;counter;chain;certs;Certificates of any other kind (committee, MIR, ...)
+cardano;withdrawals.count;Withdrawals;counter;chain;withdrawals;Reward-account withdrawals
+cardano;withdrawals.value;Withdrawn;distribution;chain;ADA;ADA withdrawn from reward accounts (one sample per withdrawal)
+cardano;stake.delegations;Delegations received;counter;entity;certs;Pool delegation certificates naming the pool (dimension pool); a flow, not the delegator count
+cardano;governance.voteDelegations;Vote delegations received;counter;entity;certs;Vote delegation certificates naming the DRep (dimension drep)
 midnight;blocks.count;Blocks;counter;chain;blocks;Number of blocks indexed in the bucket
 midnight;blocks.interval;Block interval;distribution;chain;s;Seconds between consecutive blocks (one sample per block)
 midnight;blocks.empty;Empty blocks;counter;chain;blocks;Blocks without transactions

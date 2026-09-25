@@ -5,7 +5,7 @@
  * value 1 (count == sum), a distribution contributes the measured value. Both
  * therefore share one bucket shape (count, sum, sumSq, min, max, histogram).
  */
-import type { AddressMoveRow, AssetMoveRow, BlockRow, Chain, TxRow } from '../sources/types';
+import type { AddressMoveRow, AssetMoveRow, BlockRow, Chain, StakeActivity, TxRow } from '../sources/types';
 import { addSample, emptyHistogram, type Histogram } from './histogram';
 import { bucketStart } from './time';
 
@@ -196,6 +196,41 @@ export function computeAddressDeltas(
     if (isScriptAddress(m.address)) {
       addToEntity(entities, 'script', m.address, metric, m.time, value, m.height);
     }
+  }
+}
+
+/** Certificate kinds with a chain-wide counter; anything else counts under `certs.other`. */
+const CERT_METRIC: Record<string, string> = {
+  stake_registration: 'certs.stakeRegistrations',
+  stake_deregistration: 'certs.stakeDeregistrations',
+  pool_delegation: 'certs.poolDelegations',
+  vote_delegation: 'certs.voteDelegations',
+  pool_registration: 'certs.poolRegistrations',
+  pool_retirement: 'certs.poolRetirements',
+  drep_registration: 'certs.drepRegistrations',
+  drep_update: 'certs.drepRegistrations',
+  drep_retirement: 'certs.drepRetirements',
+};
+
+/**
+ * Certificates and withdrawals into chain-wide counters and the delegation leaderboards. A pool
+ * delegation counts for its pool (`stake.delegations`), a vote delegation for its DRep
+ * (`governance.voteDelegations`, the always-abstain / no-confidence choices included, they are
+ * targets too). Withdrawals carry their ADA; a deposit is not a movement and is not summed.
+ */
+export function computeStakeDeltas(
+  activity: StakeActivity,
+  deltas: DeltaMap,
+  entities: EntityDeltaMap,
+): void {
+  for (const c of activity.certificates) {
+    addToDelta(deltas, CERT_METRIC[c.kind] ?? 'certs.other', c.time, 1, c.height);
+    if (c.kind === 'pool_delegation' && c.poolId) addToEntity(entities, 'pool', c.poolId, 'stake.delegations', c.time, 1, c.height);
+    if (c.kind === 'vote_delegation' && c.drepId) addToEntity(entities, 'drep', c.drepId, 'governance.voteDelegations', c.time, 1, c.height);
+  }
+  for (const w of activity.withdrawals) {
+    addToDelta(deltas, 'withdrawals.count', w.time, 1, w.height);
+    addToDelta(deltas, 'withdrawals.value', w.time, w.lovelace / LOVELACE_PER_ADA, w.height);
   }
 }
 

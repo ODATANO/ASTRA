@@ -16,11 +16,10 @@
  */
 import cds from '@sap/cds';
 import type { Chain, ChainSource, ReorgRow } from '../sources/types';
-import { computeAddressDeltas, computeAssetDeltas, computeDeltas, type EntityDeltaMap } from './samples';
-import { applyDeltas, applyEntityDeltas, dropBuckets, prune, rewindTo, rollupEntityDays } from './store';
-import { bucketStart } from './time';
+import { computeAddressDeltas, computeAssetDeltas, computeDeltas, computeStakeDeltas, type EntityDeltaMap } from './samples';
+import { applyDeltas, applyEntityDeltas, dropBuckets, prune, rewindTo } from './store';
 import { applyEpochSnapshots, lastIngestedEpoch } from './epoch-snapshots';
-import { lastVerification, verifySample } from '../verification/sampling';
+import { hasReference, lastVerification, verifySample } from '../verification/sampling';
 
 const { SELECT, UPSERT, UPDATE } = cds.ql;
 const CURSORS = 'odatano.astra.ChainCursors';
@@ -73,12 +72,41 @@ const n = (v: unknown): number | null => (v === null || v === undefined || v ===
 export class ChainAggregator {
   readonly owner = `${process.pid}-${Math.random().toString(36).slice(2, 10)}`;
   private cycles = 0;
+  /**
+   * Bumped by `abandonCycle()`. A cycle remembers the epoch it started in and
+   * stops before its next write once the scheduler has given up on it, so a
+   * cycle that comes back late (a dead pool handle that finally times out) can
+   * no longer write next to the cycle that replaced it.
+   */
+  private epoch = 0;
+  /** Set once a chain turned out to have no independent reference; the check is then off, not retried every cycle. */
+  private verifyOff = false;
+  /** Wall clock of the last verification attempt in this process, successful or not. */
+  private lastVerifyAttemptMs = 0;
 
   constructor(
     readonly chain: Chain,
-    readonly source: ChainSource,
+    public source: ChainSource,
     private readonly opts: AggregatorOptions,
   ) {}
+
+  /** The scheduler gave up on the running cycle: it must not write again. */
+  abandonCycle(): void {
+    this.epoch++;
+  }
+
+  /** Swap the source connection (after a reconnect); the next cycle reads through the new one. */
+  replaceSource(source: ChainSource): void {
+    this.source = source;
+  }
+
+  /** Record a failure the cycle itself could not report (it never returned). */
+  async noteFailure(message: string): Promise<void> {
+    const now = new Date().toISOString();
+    await this.run(
+      UPDATE.entity(CURSORS).set({ lastError: message.slice(0, 500), lastErrorAt: now, lastRunAt: now }).where({ chain: this.chain }),
+    ).catch(() => undefined);
+  }
 
   private get log() {
     return this.opts.log ?? cds.log('astra');
@@ -149,6 +177,8 @@ export class ChainAggregator {
 
   async runCycle(budgetMs = 8000): Promise<CycleResult> {
     const t0 = Date.now();
+    const epoch = this.epoch;
+    const abandoned = () => this.epoch !== epoch;
     const result: CycleResult = { chain: this.chain, reorgs: 0, chunks: 0, blocks: 0, txs: 0, fromHeight: null, toHeight: null, caughtUp: false, ms: 0 };
     if (!(await this.acquireLease())) {
       result.skipped = 'no-lease';
@@ -187,23 +217,22 @@ export class ChainAggregator {
       let last = cursor.lastHeight!;
       let prevTime = cursor.lastBlockTime;
       result.fromHeight = last + 1;
-      // Days whose entity hours changed in this cycle; rolled up once at the end rather than
-      // per chunk, so a backfill does not re-read a whole day of leaderboard rows thousands of times.
-      const touchedDays = new Set<number>();
       while (last < tip.height && Date.now() - t0 < budgetMs) {
         const from = last + 1;
         const to = Math.min(tip.height, from + this.opts.chunkBlocks - 1);
-        const [blocks, txs, moves, addressMoves] = await Promise.all([
+        const [blocks, txs, moves, addressMoves, stake] = await Promise.all([
           this.source.getBlocks(from, to),
           this.source.getTransactions(from, to),
           this.source.getAssetMovements ? this.source.getAssetMovements(from, to) : Promise.resolve([]),
           this.source.getAddressActivity ? this.source.getAddressActivity(from, to) : Promise.resolve([]),
+          this.source.getStakeActivity ? this.source.getStakeActivity(from, to) : Promise.resolve(null),
         ]);
         const entities: EntityDeltaMap = new Map();
         const { deltas, lastBlockTime } = computeDeltas(blocks, txs, { chain: this.chain, prevBlockTime: prevTime }, entities);
         if (moves.length) computeAssetDeltas(moves, deltas, entities);
         if (addressMoves.length) computeAddressDeltas(addressMoves, deltas, entities);
-        for (const e of entities.values()) touchedDays.add(bucketStart(e.bucketStart, 'day'));
+        if (stake && (stake.certificates.length || stake.withdrawals.length)) computeStakeDeltas(stake, deltas, entities);
+        if (abandoned()) throw new Error('cycle abandoned by the scheduler before writing its next chunk');
         const now = new Date().toISOString();
         await cds.tx(async tx => {
           await applyDeltas(tx, this.chain, deltas, now);
@@ -223,9 +252,6 @@ export class ChainAggregator {
         result.txs += txs.length;
         result.toHeight = to;
         if (blocks.length === 0 && to < tip.height) this.log.debug?.(`[${this.chain}] no blocks in ${from}..${to} (gap in source)`);
-      }
-      if (touchedDays.size) {
-        await cds.tx(tx => rollupEntityDays(tx, this.chain, [...touchedDays]));
       }
       await this.ingestEpochSnapshots();
       await this.maybeVerify();
@@ -254,19 +280,30 @@ export class ChainAggregator {
    */
   private async maybeVerify(): Promise<void> {
     const intervalMs = Number(process.env.ASTRA_VERIFY_INTERVAL_MS ?? 6 * 3600_000);
-    if (!Number.isFinite(intervalMs) || intervalMs <= 0) return;
+    if (!Number.isFinite(intervalMs) || intervalMs <= 0 || this.verifyOff) return;
     try {
+      // A run that could not check (reference down, 429) is not stored, so the attempt time is
+      // kept here too; otherwise every cycle retries and re-reads the sampled blocks.
+      if (Date.now() - this.lastVerifyAttemptMs < intervalMs) return;
       const last = await lastVerification(cds.db, this.chain);
       const lastMs = last?.ranAt ? Date.parse(String(last.ranAt)) : 0;
       if (Number.isFinite(lastMs) && Date.now() - lastMs < intervalMs) return;
+      this.lastVerifyAttemptMs = Date.now();
 
       const tip = await this.source.getTip();
       if (!tip?.network) return;   // nothing to compare against without knowing the network
+      if (!hasReference(this.chain, tip.network)) {
+        // Said once: a chain without a reference is a fact, not a fault to repeat every cycle.
+        this.verifyOff = true;
+        this.log.info(`[${this.chain}] verification off: no independent reference for ${this.chain} on ${tip.network}`);
+        return;
+      }
       const samples = Number(process.env.ASTRA_VERIFY_SAMPLES ?? 100);
       const r = await verifySample(cds.db, this.source, this.chain, tip.network, samples);
       if (r.error) this.log.warn(`[${this.chain}] verification skipped: ${r.error}`);
       else if (r.mismatches.length) {
-        this.log.warn(`[${this.chain}] verification: ${r.mismatches.length} of ${r.checked} blocks disagree with ${r.reference}`);
+        // `checked` counts the blocks the reference knew; a hash it does not know is a mismatch on its own
+        this.log.warn(`[${this.chain}] verification: ${r.mismatches.length} mismatch(es) in ${r.samples} sampled blocks, ${r.checked} known to ${r.reference}`);
       } else {
         this.log.info(`[${this.chain}] verification: ${r.checked} blocks agree with ${r.reference}`);
       }
@@ -303,7 +340,7 @@ export class ChainAggregator {
   private async resolveStartHeight(tipHeight: number): Promise<number | null> {
     const startSec = Math.floor(Date.parse(this.opts.startTime) / 1000);
     const [atTime, crawlStart] = await Promise.all([
-      this.source.findFirstHeightAt(startSec),
+      this.source.findFirstHeightAt(startSec, tipHeight),
       this.source.getCrawlStartHeight(),
     ]);
     if (atTime === null && crawlStart === null) return null;

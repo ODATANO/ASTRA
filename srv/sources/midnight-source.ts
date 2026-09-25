@@ -58,11 +58,11 @@ export class MidnightSource implements ChainSource {
     return this.tsScale;
   }
 
-  async findFirstHeightAt(unixSeconds: number): Promise<number | null> {
+  async findFirstHeightAt(unixSeconds: number, maxHeight?: number): Promise<number | null> {
     const scale = await this.timestampScale();
-    const b = await this.run(
-      SELECT.one.from(E.Blocks).columns('height').where({ timestamp: { '>=': unixSeconds * scale } }).orderBy('timestamp asc'),
-    );
+    const q = SELECT.one.from(E.Blocks).columns('height').where({ timestamp: { '>=': unixSeconds * scale } });
+    if (maxHeight !== undefined) q.where({ height: { '<=': maxHeight } });
+    const b = await this.run(q.orderBy('timestamp asc'));
     return b ? num(b.height) : null;
   }
 

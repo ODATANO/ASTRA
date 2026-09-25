@@ -55,6 +55,19 @@ service AstraService {
     stake_totalLive = 'stake.totalLive';
     governance_dreps = 'governance.dreps';
     governance_totalPower = 'governance.totalPower';
+    certs_stakeRegistrations = 'certs.stakeRegistrations';
+    certs_stakeDeregistrations = 'certs.stakeDeregistrations';
+    certs_poolDelegations = 'certs.poolDelegations';
+    certs_voteDelegations = 'certs.voteDelegations';
+    certs_poolRegistrations = 'certs.poolRegistrations';
+    certs_poolRetirements = 'certs.poolRetirements';
+    certs_drepRegistrations = 'certs.drepRegistrations';
+    certs_drepRetirements = 'certs.drepRetirements';
+    certs_other = 'certs.other';
+    withdrawals_count = 'withdrawals.count';
+    withdrawals_value = 'withdrawals.value';
+    stake_delegations = 'stake.delegations';
+    governance_voteDelegations = 'governance.voteDelegations';
     tx_system = 'tx.system';
     tx_size = 'tx.size';
     tx_shielded = 'tx.shielded';
@@ -214,6 +227,29 @@ service AstraService {
         toHeight   : Integer64;
   }
 
+  /**
+   * Certificates and withdrawals per UTC day (Cardano). Filled only for blocks the source
+   * crawled with its certificate feature on; earlier days carry zeros, not nulls.
+   */
+  @readonly @cds.persistence.skip
+  entity StakeDaily {
+    key chain                : astra.Chain;
+    key day                  : Date;
+        stakeRegistrations   : Integer64;
+        stakeDeregistrations : Integer64;
+        poolDelegations      : Integer64;
+        voteDelegations      : Integer64;
+        poolRegistrations    : Integer64;
+        poolRetirements      : Integer64;
+        drepRegistrations    : Integer64;
+        drepRetirements      : Integer64;
+        otherCertificates    : Integer64;
+        withdrawals          : Integer64;
+        withdrawnAda         : Decimal(38, 6);
+        fromHeight           : Integer64;
+        toHeight             : Integer64;
+  }
+
   /** Stake and governance per epoch (Cardano): the snapshot ASTRA took at the epoch boundary. */
   @readonly @cds.persistence.skip
   entity StakeEpochs {
@@ -259,6 +295,10 @@ service AstraService {
   @readonly @cds.persistence.skip entity TopPools          : RankingRow {}
   /** DReps by voting power in the newest epoch snapshot (window epoch). */
   @readonly @cds.persistence.skip entity TopDReps          : RankingRow {}
+  /** Pools by delegation certificates received in the window (a flow of new delegations, not the delegator count). */
+  @readonly @cds.persistence.skip entity TopDelegatedPools : RankingRow {}
+  /** DReps by vote delegation certificates received in the window; always-abstain and no-confidence rank as targets too. */
+  @readonly @cds.persistence.skip entity TopVotedDReps     : RankingRow {}
 
   type WindowResult {
     chain       : astra.Chain;

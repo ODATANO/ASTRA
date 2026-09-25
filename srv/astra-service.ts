@@ -12,6 +12,7 @@ import { activeChains, getAggregator, runNow } from './aggregator/scheduler';
 import { applyQuery, bounds, parseQuery, pinned, type ParsedQuery } from './views/query';
 import { DAILY_VIEWS, readDailyView, readStakeEpochs } from './views/daily';
 import { RANKINGS, readKeyFigures, readRanking } from './views/figures';
+import { viewMemo } from './views/memo';
 import type { LeaderboardWindow } from './aggregator/leaderboards';
 
 const { SELECT } = cds.ql;
@@ -134,6 +135,7 @@ export default class AstraService extends cds.ApplicationService {
       const agg = getAggregator(chain);
       if (!agg) return req.reject(409, `chain '${chain}' has no active aggregator (source not configured)`);
       await agg.recompute(fromHeight ?? null);
+      viewMemo.clear();
       return this.status(chain);
     });
 
@@ -141,6 +143,7 @@ export default class AstraService extends cds.ApplicationService {
       const { chain } = req.data as { chain: Chain };
       if (!getAggregator(chain)) return req.reject(409, `chain '${chain}' has no active aggregator (source not configured)`);
       await runNow(chain);
+      viewMemo.clear();
       return this.status(chain);
     });
 
@@ -166,7 +169,8 @@ export default class AstraService extends cds.ApplicationService {
   private async readKeyFigures(req: any) {
     const q = parseQuery(req);
     const windows = (pinned<string>(q, 'window') ?? []).filter(isWindow);
-    const rows = await readKeyFigures(cds.db, this.chainsOf(q), pinned<string>(q, 'metric'), windows.length ? windows : null);
+    const chains = this.chainsOf(q), metrics = pinned<string>(q, 'metric');
+    const rows = await viewMemo.get(`figures|${chains}|${metrics}|${windows}`, () => readKeyFigures(cds.db, chains, metrics, windows.length ? windows : null));
     return applyQuery(rows, q, [{ column: 'chain' }, { column: 'metric' }, { column: 'window' }]);
   }
 
@@ -177,13 +181,16 @@ export default class AstraService extends cds.ApplicationService {
     const b = bounds(q, 'day');
     const from = day ?? (typeof b.min === 'string' ? b.min : null);
     const to = day ?? (typeof b.max === 'string' ? b.max : null);
-    const rows = await readDailyView(cds.db, view, this.chainsOf(q), from, to);
+    const chains = this.chainsOf(q);
+    const rows = await viewMemo.get(`daily|${view}|${chains}|${from}|${to}`, () => readDailyView(cds.db, view, chains, from, to));
     return applyQuery(rows, q, [{ column: 'day', desc: true }, { column: 'chain' }]);
   }
 
   private async readEpochs(req: any) {
     const q = parseQuery(req);
-    return applyQuery(await readStakeEpochs(cds.db, this.chainsOf(q)), q, [{ column: 'epoch', desc: true }, { column: 'chain' }]);
+    const chains = this.chainsOf(q);
+    const rows = await viewMemo.get(`epochs|${chains}`, () => readStakeEpochs(cds.db, chains));
+    return applyQuery(rows, q, [{ column: 'epoch', desc: true }, { column: 'chain' }]);
   }
 
   private async readRanking(req: any, name: string) {
@@ -196,13 +203,19 @@ export default class AstraService extends cds.ApplicationService {
     const eqRank = pinned<number>(q, 'rank');
     if (eqRank) limit = Math.max(...eqRank.map(Number));
     limit = Math.max(1, Math.min(200, Number.isFinite(limit) ? limit : 20));
-    const rows = await readRanking(cds.db, name, this.chainsOf(q), windows.length ? windows : null, limit);
+    const chains = this.chainsOf(q), depth = limit;
+    const rows = await viewMemo.get(`ranking|${name}|${chains}|${windows}|${depth}`, () => readRanking(cds.db, name, chains, windows.length ? windows : null, depth));
     return applyQuery(rows, q, [{ column: 'chain' }, { column: 'window' }, { column: 'rank' }]);
   }
 
   private async readOverview(req: any) {
     const q = parseQuery(req);
     const wanted = pinned<string>(q, 'chain') ?? undefined;
+    const rows = await viewMemo.get(`overview|${wanted}`, () => this.computeOverview(wanted));
+    return applyQuery(rows, q, [{ column: 'chain' }]);
+  }
+
+  private async computeOverview(wanted: string[] | undefined) {
     const cursors: any[] = await cds.db.run(SELECT.from('odatano.astra.ChainCursors').orderBy('chain'));
     const chains = (cursors.map(c => c.chain as Chain).length ? cursors.map(c => c.chain as Chain) : activeChains()).filter(c => !wanted || wanted.includes(c));
     const now = Date.now();
@@ -243,7 +256,7 @@ export default class AstraService extends cds.ApplicationService {
         avgTxPerBlock24h: txPerBlock24h.avg,
       });
     }
-    return applyQuery(rows, q, [{ column: 'chain' }]);
+    return rows;
   }
 }
 
