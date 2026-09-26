@@ -18,6 +18,8 @@ import type { LeaderboardWindow } from './aggregator/leaderboards';
 const { SELECT } = cds.ql;
 const CHAINS: Chain[] = ['cardano', 'midnight'];
 const DIMENSIONS: Dimension[] = ['token', 'policy', 'script', 'address', 'producer', 'pool', 'drep', 'tokenHolder'];
+/** Fee figures of the overview are reported while the fee data reaches to within this of the newest block. */
+const FEES_CURRENT_SEC = 3600;
 
 export default class AstraService extends cds.ApplicationService {
   async init() {
@@ -233,6 +235,12 @@ export default class AstraService extends cds.ApplicationService {
       const tip = num(c.sourceTipHeight);
       const chainHeight = num(c.sourceChainHeight);
       const agg = num(c.lastHeight);
+      // A chain without a fee pass has its fees with the block; one with it is only as far as that pass.
+      const feePass = c.feeHeight !== null && c.feeHeight !== undefined;
+      const feesThroughHeight = feePass ? num(c.feeHeight) : agg;
+      const feesThroughTime = feePass ? num(c.feeBlockTime) : num(c.lastBlockTime);
+      const lastBlockTime = num(c.lastBlockTime);
+      const feesCurrent = !feePass || (feesThroughTime !== null && lastBlockTime !== null && lastBlockTime - feesThroughTime <= FEES_CURRENT_SEC);
       rows.push({
         chain,
         network: c.network ?? null,
@@ -250,9 +258,14 @@ export default class AstraService extends cds.ApplicationService {
         avgBlockTime1h: interval1h.avg,
         tx1h: tx1h.count, tx1hPrev: tx1h.prevCount, tx1hChangePct: changePct(tx1h.count, tx1h.prevCount),
         tx24h: tx24h.count,
-        fees24h: fees24h.sum, fees24hPrev: fees24h.prevSum, fees24hChangePct: changePct(fees24h.sum, fees24h.prevSum),
+        feesThroughHeight,
+        feesThroughAt: feesThroughTime !== null ? new Date(feesThroughTime * 1000).toISOString() : null,
+        fees24h: feesCurrent ? fees24h.sum : null,
+        fees24hPrev: feesCurrent ? fees24h.prevSum : null,
+        fees24hChangePct: feesCurrent ? changePct(fees24h.sum, fees24h.prevSum) : null,
         feeUnit: fees24h.unit,
-        medianFee24h: fees24h.p50, p95Fee24h: fees24h.p95,
+        medianFee24h: feesCurrent ? fees24h.p50 : null,
+        p95Fee24h: feesCurrent ? fees24h.p95 : null,
         avgTxPerBlock24h: txPerBlock24h.avg,
       });
     }

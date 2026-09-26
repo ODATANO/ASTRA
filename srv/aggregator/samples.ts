@@ -238,6 +238,31 @@ export interface SampleContext {
   chain: Chain;
   /** unix seconds of the block preceding `blocks[0]`, for blocks.interval */
   prevBlockTime: number | null;
+  /** false when the fees arrive later and are aggregated by their own pass (computeFeeDeltas). */
+  fees?: boolean;
+}
+
+/** Metrics that come from a transaction's fee; a source that fills fees in late owns them in a pass of their own. */
+export const FEE_METRICS = ['fees.paid', 'fees.estimated', 'fees.estimateError'] as const;
+
+function addFeeSamples(deltas: DeltaMap, tx: TxRow, isMidnight: boolean): void {
+  if (tx.fee !== null && tx.fee !== undefined) addToDelta(deltas, 'fees.paid', tx.time, tx.fee, tx.height);
+  if (!isMidnight) return;
+  const est = typeof tx.flags?.estimatedFees === 'number' ? tx.flags.estimatedFees : null;
+  if (est === null) return;
+  addToDelta(deltas, 'fees.estimated', tx.time, est, tx.height);
+  if (tx.fee !== null && tx.fee !== undefined) addToDelta(deltas, 'fees.estimateError', tx.time, tx.fee - est, tx.height);
+}
+
+/** Fee deltas alone, for the pass that trails a source's late fee fill-in. Midnight system extrinsics pay none. */
+export function computeFeeDeltas(txs: TxRow[], chain: Chain): DeltaMap {
+  const deltas: DeltaMap = new Map();
+  const isMidnight = chain === 'midnight';
+  for (const tx of txs) {
+    if (isMidnight && tx.flags?.system) continue;
+    addFeeSamples(deltas, tx, isMidnight);
+  }
+  return deltas;
 }
 
 /**
@@ -253,6 +278,7 @@ export function computeDeltas(
   const deltas: DeltaMap = new Map();
   const txPerBlock = new Map<number, number>();
   const isMidnight = ctx.chain === 'midnight';
+  const withFees = ctx.fees !== false;
 
   for (const tx of txs) {
     const f = tx.flags || {};
@@ -263,7 +289,7 @@ export function computeDeltas(
     txPerBlock.set(tx.height, (txPerBlock.get(tx.height) || 0) + 1);
     addToDelta(deltas, 'tx.count', tx.time, 1, tx.height);
     if (tx.size !== null && tx.size !== undefined) addToDelta(deltas, 'tx.size', tx.time, tx.size, tx.height);
-    if (tx.fee !== null && tx.fee !== undefined) addToDelta(deltas, 'fees.paid', tx.time, tx.fee, tx.height);
+    if (withFees) addFeeSamples(deltas, tx, isMidnight);
 
     if (isMidnight) {
       if (f.isShielded) addToDelta(deltas, 'tx.shielded', tx.time, 1, tx.height);
@@ -271,11 +297,6 @@ export function computeDeltas(
       if (f.txType === 'contract_call') addToDelta(deltas, 'tx.contractCalls', tx.time, 1, tx.height);
       if (f.txType === 'contract_deploy') addToDelta(deltas, 'tx.contractDeploys', tx.time, 1, tx.height);
       if (f.status === 'FAILURE') addToDelta(deltas, 'tx.failed', tx.time, 1, tx.height);
-      const est = typeof f.estimatedFees === 'number' ? f.estimatedFees : null;
-      if (est !== null) {
-        addToDelta(deltas, 'fees.estimated', tx.time, est, tx.height);
-        if (tx.fee !== null && tx.fee !== undefined) addToDelta(deltas, 'fees.estimateError', tx.time, tx.fee - est, tx.height);
-      }
     } else if (f.hasMetadata) {
       addToDelta(deltas, 'tx.withMetadata', tx.time, 1, tx.height);
     }

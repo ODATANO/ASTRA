@@ -107,6 +107,8 @@ service AstraService {
         tx1hPrev          : Integer64;
         tx1hChangePct     : Decimal(9, 2);
         tx24h             : Integer64;
+        feesThroughHeight : Integer64;      // last height whose fees are aggregated (Midnight fills fees in after the block)
+        feesThroughAt     : Timestamp;      // time of that block; the fee figures below are null while it is over an hour behind lastBlockAt
         fees24h           : Decimal(38, 6);
         fees24hPrev       : Decimal(38, 6);
         fees24hChangePct  : Decimal(9, 2);

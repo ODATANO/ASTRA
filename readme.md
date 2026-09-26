@@ -16,6 +16,11 @@ the block range it was computed from.
 - **Buckets, not raw data.** A scheduler polls each source's sync cursor, aggregates new
   blocks in chunks into minute, hour and day buckets (count, sum, min, max, log histogram)
   and per-entity buckets for rankings. Reorgs in the sources are detected and recomputed.
+- **Midnight fees trail the blocks.** NIGHTGATE writes each fee as 0 and fills in the real
+  value later (indexer supplement, `lastSupplementedHeight`). ASTRA aggregates the fee
+  metrics in a pass of their own up to that height (`SyncStatus.feeHeight`);
+  `ChainOverview` reports `feesThroughHeight` / `feesThroughAt` and leaves the 24 h fee
+  figures empty while the fees are more than an hour behind the newest block.
 - **Views are memoised.** A ready-made view (`ChainOverview`, `KeyFigures`, the daily
   entities, the rankings) is computed once per parameter set and kept for
   `ASTRA_VIEW_CACHE_MS` (default 5 s, 0 = off); readers that arrive while it computes

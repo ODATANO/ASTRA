@@ -286,3 +286,24 @@ describe('through the OData service', () => {
     expect(Number(r.json.value)).toBe(33);
   });
 });
+
+describe('fee coverage in the chain overview', () => {
+  it('reports how far the fees reach and leaves the fee figures empty while they trail', async () => {
+    const sec = (ms: number) => Math.floor(ms / 1000);
+    await cds.db.run(cds.ql.UPSERT.into('odatano.astra.ChainCursors').entries([
+      { chain: 'cardano', lastHeight: 1009, lastBlockTime: sec(NOW) },
+      { chain: 'midnight', lastHeight: 57, lastBlockTime: sec(NOW), feeHeight: 40, feeBlockTime: sec(NOW - 3 * HOUR), sourceFeeHeight: 40 },
+    ]));
+    const r = await get(`/ChainOverview`);
+    expect(r.status, JSON.stringify(r.json)).toBe(200);
+    const cardano = r.json.value.find((x: any) => x.chain === 'cardano');
+    const midnight = r.json.value.find((x: any) => x.chain === 'midnight');
+    expect(Number(cardano.feesThroughHeight)).toBe(1009);
+    expect(cardano.fees24h).not.toBeNull();
+    expect(Number(midnight.feesThroughHeight)).toBe(40);
+    expect(midnight.feesThroughAt).toBe(new Date(sec(NOW - 3 * HOUR) * 1000).toISOString());
+    expect(midnight.fees24h).toBeNull();
+    expect(midnight.medianFee24h).toBeNull();
+    expect(midnight.p95Fee24h).toBeNull();
+  });
+});

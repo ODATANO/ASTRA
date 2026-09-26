@@ -153,7 +153,7 @@ describe('midnight aggregation over the NIGHTGATE schema', () => {
         await db.run(INSERT.into('midnight.TransactionResults').entries({ ID: cds.utils.uuid(), status: 'SUCCESS', transaction_ID: tx }));
       }
     }
-    await db.run(UPSERT.into('midnight.SyncState').entries({ ID: 'SINGLETON', networkId: 'preprod', lastIndexedHeight: 519, chainHeight: 521, syncStatus: 'synced' }));
+    await db.run(UPSERT.into('midnight.SyncState').entries({ ID: 'SINGLETON', networkId: 'preprod', lastIndexedHeight: 519, chainHeight: 521, lastSupplementedHeight: 519, syncStatus: 'synced' }));
 
     const agg = new ChainAggregator('midnight', new MidnightSource(db), {
       chunkBlocks: 7, startTime: new Date(startMs).toISOString(), leaseMs: 60000,
@@ -705,5 +705,100 @@ describe('entity buckets', () => {
     expect(byKey['hour@3600000']).toEqual({ count: 3, sum: 13.5, fromHeight: 10, toHeight: 12 });
     expect(byKey['hour@7200000']).toEqual({ count: 1, sum: 4, fromHeight: 20, toHeight: 20 });
     expect(byKey['day@0']).toEqual({ count: 5, sum: 22.5, fromHeight: 5, toHeight: 20 });
+  });
+});
+
+describe('fees filled in after the block (Midnight supplement)', () => {
+  const FEE = 120_000;
+  async function seedMidnight(db: any, from: number, to: number, startMs: number): Promise<number> {
+    let t = startMs;
+    for (let h = from; h <= to; h++) {
+      t += 6000;
+      const id = cds.utils.uuid();
+      await db.run(INSERT.into('midnight.Blocks').entries({ ID: id, hash: hex(64) + h, height: h, protocolVersion: 1, timestamp: t, author: 'a', ledgerParameters: 'l' }));
+      const tx = cds.utils.uuid();
+      await db.run(INSERT.into('midnight.Transactions').entries({ ID: tx, transactionId: 1, hash: 'f' + h, protocolVersion: 1, transactionType: 'REGULAR', txType: 'contract_call', size: 800, block_ID: id }));
+      await db.run(INSERT.into('midnight.TransactionFees').entries({ ID: cds.utils.uuid(), paidFees: String(FEE), estimatedFees: '100000', transaction_ID: tx }));
+    }
+    return t;
+  }
+  const syncState = (db: any, supplemented: number | null, indexed = 629) =>
+    db.run(UPSERT.into('midnight.SyncState').entries({ ID: 'SINGLETON', networkId: 'preprod', lastIndexedHeight: indexed, chainHeight: indexed, lastSupplementedHeight: supplemented, syncStatus: 'synced' }));
+  const reset = async () => {
+    await cds.db.run(DELETE.from('odatano.astra.ChainCursors').where({ chain: 'midnight' }));
+    await cds.db.run(DELETE.from('odatano.astra.MetricBuckets').where({ chain: 'midnight' }));
+    await cds.db.run(DELETE.from('odatano.astra.EntityBuckets').where({ chain: 'midnight' }));
+  };
+  const opts = (startMs: number) => ({
+    chunkBlocks: 8, startTime: new Date(startMs).toISOString(), leaseMs: 60000,
+    retention: { minuteHours: 48, hourDays: 90 }, log: { info() {}, warn() {} },
+  });
+
+  it('counts fees only up to the supplemented height, then catches up without counting a block twice', async () => {
+    await reset();
+    const db = await connectSource('midnight', sqliteFile('midnight-fees.sqlite'));
+    const startMs = now - 30 * 60_000;
+    const mid = await seedMidnight(db, 600, 619, startMs);
+    await syncState(db, 609, 619);
+    const agg = new ChainAggregator('midnight', new MidnightSource(db), opts(startMs));
+    await agg.runCycle(60000);
+
+    // blocks that arrive after the fee pass started carry no final fee yet
+    const t = await seedMidnight(db, 620, 629, mid);
+    await syncState(db, 609);
+    await agg.runCycle(60000);
+    let c = await agg.getCursor();
+    expect(c?.lastHeight).toBe(629);
+    expect(c?.feeHeight).toBe(609);
+    expect(c?.sourceFeeHeight).toBe(609);
+    expect((await computeWindow(cds.db, 'midnight', 'tx.count', '1h', t)).count).toBe(30);
+    expect((await computeWindow(cds.db, 'midnight', 'fees.paid', '1h', t)).count).toBe(10);
+
+    await syncState(db, 629);
+    const r = await agg.runCycle(60000);
+    expect(r.feeBlocks).toBe(20);
+    c = await agg.getCursor();
+    expect(c?.feeHeight).toBe(629);
+    const fees = await computeWindow(cds.db, 'midnight', 'fees.paid', '1h', t);
+    expect(fees.count).toBe(30);
+    expect(fees.sum).toBe(30 * FEE);
+    expect((await computeWindow(cds.db, 'midnight', 'fees.estimateError', '1h', t)).avg).toBe(20000);
+    expect((await computeWindow(cds.db, 'midnight', 'tx.count', '1h', t)).count).toBe(30);
+  });
+
+  it('replaces the fees the block pass wrote before, and rewinds with a recompute', async () => {
+    await reset();
+    const db = await connectSource('midnight', sqliteFile('midnight-fees-2.sqlite'));
+    const startMs = now - 30 * 60_000;
+    const t = await seedMidnight(db, 600, 629, startMs);
+    await syncState(db, 629);
+    // a source without a fee height: fees come with the block, as before the fee pass existed
+    const inline = new MidnightSource(db);
+    const plain: any = Object.create(inline);
+    plain.getTip = async () => { const tip = await inline.getTip(); delete (tip as any).feeHeight; return tip; };
+    const agg = new ChainAggregator('midnight', plain, opts(startMs));
+    await agg.runCycle(60000);
+    expect((await computeWindow(cds.db, 'midnight', 'fees.paid', '1h', t)).count).toBe(30);
+    expect((await agg.getCursor())?.feeHeight).toBeNull();
+
+    agg.replaceSource(inline);
+    await agg.runCycle(60000);
+    expect((await agg.getCursor())?.feeHeight).toBe(629);
+    expect((await computeWindow(cds.db, 'midnight', 'fees.paid', '1h', t)).count).toBe(30);
+
+    await agg.recompute(615);
+    const rewound = await agg.getCursor();
+    expect(rewound?.feeHeight).toBeLessThanOrEqual(614);
+    expect(rewound?.feeHeight).toBe(rewound?.lastHeight);
+    await agg.runCycle(60000);
+    const fees = await computeWindow(cds.db, 'midnight', 'fees.paid', '1h', t);
+    expect(fees.count).toBe(30);
+    expect(fees.sum).toBe(30 * FEE);
+    expect((await computeWindow(cds.db, 'midnight', 'tx.count', '1h', t)).count).toBe(30);
+
+    await agg.recompute(null);
+    expect((await agg.getCursor())?.feeHeight).toBeNull();
+    await agg.runCycle(60000);
+    expect((await computeWindow(cds.db, 'midnight', 'fees.paid', '1h', t)).sum).toBe(30 * FEE);
   });
 });

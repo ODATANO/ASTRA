@@ -148,6 +148,10 @@ entity ChainCursors {
       sourceChainHeight   : Integer64; // node tip as reported by the source
       sourceSyncStatus    : String(20);
       sourceLastIndexedAt : Timestamp;
+      // Fees the source fills in after the block (Midnight) are aggregated by their own pass.
+      feeHeight           : Integer64; // last height whose fees are aggregated; null = pass not started
+      feeBlockTime        : Integer64; // unix seconds of the newest block the fee pass has covered
+      sourceFeeHeight     : Integer64; // last height whose fees the source has filled in
       backfilling         : Boolean default true;
       lastRunAt           : Timestamp;
       lastRunMs           : Integer;

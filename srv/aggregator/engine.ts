@@ -10,18 +10,21 @@
  *      the height range, compute minute deltas, merge + roll up, advance cursor –
  *      one ASTRA transaction per chunk
  *   5. stop when caught up or when the time budget is spent; the scheduler calls again
+ *   6. a source that fills fees in after the block (Midnight) gets a second cursor, `feeHeight`:
+ *      the block pass leaves the fee metrics out, the fee pass adds them up to the height the
+ *      source has filled in
  *
  * The cursor row (odatano.astra.ChainCursors) is the only state. Every bucket
  * carries fromHeight/toHeight, so a rewind can always find its resume point.
  */
 import cds from '@sap/cds';
 import type { Chain, ChainSource, ReorgRow } from '../sources/types';
-import { computeAddressDeltas, computeAssetDeltas, computeDeltas, computeStakeDeltas, type EntityDeltaMap } from './samples';
-import { applyDeltas, applyEntityDeltas, dropBuckets, prune, rewindTo } from './store';
+import { FEE_METRICS, computeAddressDeltas, computeAssetDeltas, computeDeltas, computeFeeDeltas, computeStakeDeltas, type EntityDeltaMap } from './samples';
+import { BUCKETS, applyDeltas, applyEntityDeltas, dropBuckets, prune, rewindTo } from './store';
 import { applyEpochSnapshots, lastIngestedEpoch } from './epoch-snapshots';
 import { hasReference, lastVerification, verifySample } from '../verification/sampling';
 
-const { SELECT, UPSERT, UPDATE } = cds.ql;
+const { SELECT, UPSERT, UPDATE, DELETE } = cds.ql;
 const CURSORS = 'odatano.astra.ChainCursors';
 const REORGS = 'odatano.astra.Reorgs';
 
@@ -45,6 +48,9 @@ export interface Cursor {
   sourceChainHeight: number | null;
   sourceSyncStatus: string | null;
   sourceLastIndexedAt: string | null;
+  feeHeight: number | null;
+  feeBlockTime: number | null;
+  sourceFeeHeight: number | null;
   backfilling: boolean;
   lastRunAt: string | null;
   lastRunMs: number | null;
@@ -64,10 +70,23 @@ export interface CycleResult {
   fromHeight: number | null;
   toHeight: number | null;
   caughtUp: boolean;
+  /** Blocks whose fees the fee pass added this cycle. */
+  feeBlocks: number;
   ms: number;
 }
 
 const n = (v: unknown): number | null => (v === null || v === undefined || v === '' ? null : Number(v));
+
+/**
+ * Cursor patch for the fee pass once the buckets from `resumeFrom` on are dropped: it resumes
+ * there too. `resumeFrom` null = every bucket is gone and the pass starts over.
+ */
+function feeRewind(cursor: Cursor, resumeFrom: number | null, prevBlockTime: number | null): Record<string, unknown> {
+  if (cursor.feeHeight === null) return {};
+  if (resumeFrom === null) return { feeHeight: null, feeBlockTime: null };
+  if (cursor.feeHeight < resumeFrom) return {};
+  return { feeHeight: resumeFrom - 1, feeBlockTime: prevBlockTime };
+}
 
 export class ChainAggregator {
   readonly owner = `${process.pid}-${Math.random().toString(36).slice(2, 10)}`;
@@ -134,6 +153,7 @@ export class ChainAggregator {
       lastReorgDetectedAt: r.lastReorgDetectedAt ?? null,
       sourceTipHeight: n(r.sourceTipHeight), sourceChainHeight: n(r.sourceChainHeight),
       sourceSyncStatus: r.sourceSyncStatus ?? null, sourceLastIndexedAt: r.sourceLastIndexedAt ?? null,
+      feeHeight: n(r.feeHeight), feeBlockTime: n(r.feeBlockTime), sourceFeeHeight: n(r.sourceFeeHeight),
       backfilling: !!r.backfilling, lastRunAt: r.lastRunAt ?? null, lastRunMs: n(r.lastRunMs),
       lastError: r.lastError ?? null, lastErrorAt: r.lastErrorAt ?? null,
       leaseOwner: r.leaseOwner ?? null, leaseUntil: r.leaseUntil ?? null,
@@ -179,7 +199,7 @@ export class ChainAggregator {
     const t0 = Date.now();
     const epoch = this.epoch;
     const abandoned = () => this.epoch !== epoch;
-    const result: CycleResult = { chain: this.chain, reorgs: 0, chunks: 0, blocks: 0, txs: 0, fromHeight: null, toHeight: null, caughtUp: false, ms: 0 };
+    const result: CycleResult = { chain: this.chain, reorgs: 0, chunks: 0, blocks: 0, txs: 0, fromHeight: null, toHeight: null, caughtUp: false, feeBlocks: 0, ms: 0 };
     if (!(await this.acquireLease())) {
       result.skipped = 'no-lease';
       result.ms = Date.now() - t0;
@@ -196,7 +216,9 @@ export class ChainAggregator {
         network: tip.network ?? null,
         sourceTipHeight: tip.height, sourceChainHeight: tip.chainHeight ?? null,
         sourceSyncStatus: tip.syncStatus ?? null, sourceLastIndexedAt: tip.lastIndexedAt ?? null,
+        ...(tip.feeHeight !== undefined ? { sourceFeeHeight: tip.feeHeight } : {}),
       });
+      const feesTrail = tip.feeHeight !== undefined;
 
       let cursor = await this.ensureCursor();
       result.reorgs = await this.applyReorgs(cursor);
@@ -228,7 +250,7 @@ export class ChainAggregator {
           this.source.getStakeActivity ? this.source.getStakeActivity(from, to) : Promise.resolve(null),
         ]);
         const entities: EntityDeltaMap = new Map();
-        const { deltas, lastBlockTime } = computeDeltas(blocks, txs, { chain: this.chain, prevBlockTime: prevTime }, entities);
+        const { deltas, lastBlockTime } = computeDeltas(blocks, txs, { chain: this.chain, prevBlockTime: prevTime, fees: !feesTrail }, entities);
         if (moves.length) computeAssetDeltas(moves, deltas, entities);
         if (addressMoves.length) computeAddressDeltas(addressMoves, deltas, entities);
         if (stake && (stake.certificates.length || stake.withdrawals.length)) computeStakeDeltas(stake, deltas, entities);
@@ -253,6 +275,11 @@ export class ChainAggregator {
         result.toHeight = to;
         if (blocks.length === 0 && to < tip.height) this.log.debug?.(`[${this.chain}] no blocks in ${from}..${to} (gap in source)`);
       }
+      if (feesTrail) {
+        // A backfill spends the whole budget on blocks; the fee pass keeps a quarter of it.
+        const feeBudget = Math.max(budgetMs - (Date.now() - t0), Math.floor(budgetMs / 4));
+        result.feeBlocks = await this.advanceFees(tip.feeHeight ?? null, feeBudget, abandoned);
+      }
       await this.ingestEpochSnapshots();
       await this.maybeVerify();
       result.caughtUp = last >= tip.height;
@@ -272,6 +299,48 @@ export class ChainAggregator {
       await this.run(UPDATE.entity(CURSORS).set({ lastError: msg, lastErrorAt: new Date().toISOString(), lastRunAt: new Date().toISOString(), lastRunMs: result.ms }).where({ chain: this.chain })).catch(() => undefined);
       throw e;
     }
+  }
+
+  /**
+   * Fee pass: adds the fee metrics of blocks up to the lower of the source's fee height and the
+   * block cursor. On its first run it drops the fee buckets the block pass wrote before (zeros
+   * where the source had not filled the fee in yet) and starts again at the start height.
+   */
+  private async advanceFees(sourceFeeHeight: number | null, budgetMs: number, abandoned: () => boolean): Promise<number> {
+    const t0 = Date.now();
+    let cursor = await this.getCursor();
+    if (!cursor || cursor.startHeight === null || cursor.lastHeight === null) return 0;
+    if (cursor.feeHeight === null) {
+      const start = cursor.startHeight;
+      await cds.tx(async tx => {
+        await tx.run(DELETE.from(BUCKETS).where({ chain: this.chain, metricId: { in: [...FEE_METRICS] } }));
+        await this.patchCursor(tx, { feeHeight: start - 1, feeBlockTime: null });
+      });
+      this.log.info(`[${this.chain}] fee pass starts at ${start}; the source has final fees up to ${sourceFeeHeight ?? 'no height yet'}`);
+      cursor = (await this.getCursor())!;
+    }
+    const target = Math.min(sourceFeeHeight ?? -1, cursor.lastHeight!);
+    let last = cursor.feeHeight!;
+    let lastTime = cursor.feeBlockTime;
+    let covered = 0;
+    while (last < target && Date.now() - t0 < budgetMs) {
+      const from = last + 1;
+      const to = Math.min(target, from + this.opts.chunkBlocks - 1);
+      const [txs, toBlock] = await Promise.all([this.source.getTransactions(from, to), this.source.getBlocks(to, to)]);
+      const deltas = computeFeeDeltas(txs, this.chain);
+      const time = toBlock[0]?.time ?? lastTime;
+      if (abandoned()) throw new Error('cycle abandoned by the scheduler before writing its next fee chunk');
+      const now = new Date().toISOString();
+      await cds.tx(async tx => {
+        await applyDeltas(tx, this.chain, deltas, now);
+        await this.patchCursor(tx, { feeHeight: to, feeBlockTime: time });
+        await this.renewLease(tx);
+      });
+      covered += to - last;
+      last = to;
+      lastTime = time;
+    }
+    return covered;
   }
 
   /**
@@ -395,6 +464,7 @@ export class ChainAggregator {
         lastBlockTime: prevBlocks[0]?.time ?? null,
         lastReorgDetectedAt: r.detectedAt,
         backfilling: true,
+        ...feeRewind(cursor, fork === null ? null : resumeFrom, prevBlocks[0]?.time ?? null),
       });
     });
   }
@@ -407,13 +477,16 @@ export class ChainAggregator {
     await cds.tx(async tx => {
       if (fromHeight === null || cursor.startHeight === null || fromHeight <= cursor.startHeight) {
         await dropBuckets(tx, this.chain, null);
-        await this.patchCursor(tx, { startHeight: null, lastHeight: null, lastBlockTime: null, backfilling: true, lastError: null, lastErrorAt: null });
+        await this.patchCursor(tx, { startHeight: null, lastHeight: null, lastBlockTime: null, feeHeight: null, feeBlockTime: null, backfilling: true, lastError: null, lastErrorAt: null });
         return;
       }
       const res = await rewindTo(tx, this.chain, fromHeight - 1);
       const resumeFrom = Math.max(cursor.startHeight, res.resumeFrom);
       const prev = await this.source.getBlocks(resumeFrom - 1, resumeFrom - 1);
-      await this.patchCursor(tx, { lastHeight: resumeFrom - 1, lastBlockTime: prev[0]?.time ?? null, backfilling: true, lastError: null, lastErrorAt: null });
+      await this.patchCursor(tx, {
+        lastHeight: resumeFrom - 1, lastBlockTime: prev[0]?.time ?? null, backfilling: true, lastError: null, lastErrorAt: null,
+        ...feeRewind(cursor, resumeFrom, prev[0]?.time ?? null),
+      });
     });
   }
 }

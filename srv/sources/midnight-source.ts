@@ -6,7 +6,9 @@
  *   Blocks.timestamp          unix time (Substrate writes milliseconds; normalised to seconds)
  *   Transactions.block        association → block_ID; height/time reached via path expression
  *   Transactions.transactionType  REGULAR | SYSTEM   – only REGULAR counts as "a transaction"
- *   TransactionFees.paidFees / estimatedFees   specks (DUST atoms, 1 DUST = 10^15) as decimal strings
+ *   TransactionFees.paidFees / estimatedFees   specks (DUST atoms, 1 DUST = 10^15) as decimal strings;
+ *                             the crawler writes 0, the indexer supplement pass fills the real
+ *                             value later (SyncState.lastSupplementedHeight)
  */
 import cds from '@sap/cds';
 import type { BlockRow, ChainSource, ReorgRow, SourceTip, TxRow } from './types';
@@ -41,6 +43,7 @@ export class MidnightSource implements ChainSource {
       syncStatus: row.syncStatus ?? null,
       lastIndexedAt: row.lastIndexedAt ?? null,
       network: row.networkId ?? null,
+      feeHeight: num(row.lastSupplementedHeight),
     };
   }
 

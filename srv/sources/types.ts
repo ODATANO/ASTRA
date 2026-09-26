@@ -18,6 +18,12 @@ export interface SourceTip {
   lastIndexedAt?: string | null;
   /** Which network the source indexes — a cross-check must ask the same one. */
   network?: string | null;
+  /**
+   * Set only by a source whose fees are filled in by a pass trailing its crawler: the last
+   * height whose fees are final, null while that pass has not run. Undefined = fees arrive
+   * with the block.
+   */
+  feeHeight?: number | null;
 }
 
 export interface BlockRow {

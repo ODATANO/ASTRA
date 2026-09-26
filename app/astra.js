@@ -313,6 +313,9 @@
         const staleMin = o.lastBlockAt ? (Date.now() - new Date(o.lastBlockAt).getTime()) / 60000 : Infinity;
         const fresh1h = staleMin < 60, fresh24h = staleMin < 1440;
         const delta = (fresh, prev, pct) => (fresh && Number(prev) > 0 ? pct : null);
+        // Midnight fees are filled in after the block; the server sends null until they reach the last hour
+        const feesShown = fresh24h && o.fees24h != null;
+        const feesHint = feesShown || !o.feesThroughAt ? null : (() => { const t = utc(o.feesThroughAt); return `to ${t.d} ${MON[t.m]}`; })();
         // each fee tile picks its own scale (the day's total may be in DUST while one fee is in µDUST)
         const money = (v, digits) => { const s = moneyScale(o.feeUnit, v); return [fmtNum(Number(v) / s.div, digits == null ? s.digits : digits), s.label]; };
         const [fees24h, fees24hUnit] = money(o.fees24h, o.feeUnit === 'lovelace' ? 0 : null);
@@ -324,9 +327,9 @@
         stats.appendChild(stat('Tx, 1 h', fresh1h ? fmtInt(o.tx1h) : '–', null, null, delta(fresh1h, o.tx1hPrev, o.tx1hChangePct)));
         stats.appendChild(stat('Tx, 24 h', fresh24h ? fmtInt(o.tx24h) : '–'));
         stats.appendChild(stat('Tx / block', fresh24h ? fmtNum(o.avgTxPerBlock24h, 1) : '–'));
-        stats.appendChild(stat('Fees, 24 h', fresh24h ? fees24h : '–', fresh24h ? fees24hUnit : null, null, delta(fresh24h, o.fees24hPrev, o.fees24hChangePct)));
-        stats.appendChild(stat('Median fee', fresh24h ? medianFee : '–', fresh24h ? medianFeeUnit : null));
-        stats.appendChild(stat('P95 fee', fresh24h ? p95Fee : '–', fresh24h ? p95FeeUnit : null));
+        stats.appendChild(stat('Fees, 24 h', feesShown ? fees24h : '–', feesShown ? fees24hUnit : null, feesHint, delta(feesShown, o.fees24hPrev, o.fees24hChangePct)));
+        stats.appendChild(stat('Median fee', feesShown ? medianFee : '–', feesShown ? medianFeeUnit : null, feesHint));
+        stats.appendChild(stat('P95 fee', feesShown ? p95Fee : '–', feesShown ? p95FeeUnit : null, feesHint));
         $('fact' + CHAIN_NAME[chain]).textContent = `${CHAIN_NAME[chain]} at ${fmtInt(o.sourceTipHeight)}`;
         $('fact' + CHAIN_NAME[chain]).className = chain;
       }
