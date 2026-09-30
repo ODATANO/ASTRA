@@ -16,13 +16,25 @@ import { num, toUnixSeconds } from './types';
 
 const { SELECT } = cds.ql;
 
-/** IN-list size per asset query — a few hundred hashes keeps every driver's bind limit happy. */
+/** Transactions per query: a key range on the input/output tables, an IN-list on the certificate tables. */
 const HASH_CHUNK = 400;
 
 function chunk<T>(items: T[], size: number): T[][] {
   const out: T[][] = [];
   for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
   return out;
+}
+
+/** A transaction of the height range: its hash and the block it belongs to. */
+type TxAt = { hash: string; height: number; time: number };
+
+/**
+ * Inclusive `txSeq` bounds per chunk of consecutive transactions (the map is in chain order).
+ * Only transactions of the range sit between two of its own `txSeq` values, so each bound pair
+ * reads exactly the rows of its chunk.
+ */
+function seqRanges(at: Map<string, TxAt>, size: number): Array<{ between: string; and: string }> {
+  return chunk([...at.keys()], size).map(part => ({ between: part[0], and: part[part.length - 1] }));
 }
 
 const E = {
@@ -143,88 +155,74 @@ export class CardanoSource implements ChainSource {
   /**
    * Native-asset movements on both sides of every transaction in the range.
    *
-   * Filtered by transaction hash rather than by a path expression over the block height: the
-   * asset tables carry only the foreign key to their input/output, so a height filter would
-   * mean a two-level join. A chunk is a few hundred hashes, which is the same IN-list discipline
-   * the ODATANO indexer uses when it resolves inputs.
+   * The input/output and asset tables are keyed by the transaction's chain position (`txSeq`),
+   * so a chunk of consecutive transactions is one key range on each table instead of a
+   * two-level join over the block height or an IN-list of hashes.
    *
    * Lovelace is left out — it is the chain's own currency, already covered by the value metrics,
    * and would otherwise dominate every token leaderboard by construction.
    */
   async getAssetMovements(fromHeight: number, toHeight: number): Promise<AssetMoveRow[]> {
-    const txs = await this.run(
-      SELECT.from(E.Transactions)
-        .columns('hash', 'blockHeight', 'blockTime')
-        .where({ blockHeight: { between: fromHeight, and: toHeight } }),
-    );
-    if (!txs.length) return [];
+    const at = await this.txTimes(fromHeight, toHeight);
+    if (at.size === 0) return [];
 
-    const at = new Map<string, { height: number; time: number }>();
-    for (const t of txs) {
-      const height = num(t.blockHeight);
-      const time = toUnixSeconds(t.blockTime);
-      if (height !== null && time !== null) at.set(String(t.hash), { height, time });
-    }
-
-    const hashes = [...at.keys()];
     const out: AssetMoveRow[] = [];
     const collect = (
-      rows: any[], hashKey: string, side: 'in' | 'out', idxKey: string, addresses: Map<string, string>,
+      rows: any[], seqKey: string, side: 'in' | 'out', idxKey: string, addresses: Map<string, string>,
     ) => {
       for (const r of rows) {
-        const txHash = String(r[hashKey]);
-        const where = at.get(txHash);
+        const seq = String(r[seqKey]);
+        const tx = at.get(seq);
         const quantity = num(r.asset_quantity);
-        if (!where || r.unit === 'lovelace' || quantity === null) continue;
+        if (!tx || r.unit === 'lovelace' || quantity === null) continue;
         out.push({
-          height: where.height,
-          time: where.time,
-          txHash,
+          height: tx.height,
+          time: tx.time,
+          txHash: tx.hash,
           unit: String(r.unit),
           policyId: String(r.asset_policyId ?? ''),
           quantity,
           side,
-          address: addresses.get(`${txHash}#${r[idxKey]}`) ?? '',
+          address: addresses.get(`${seq}#${r[idxKey]}`) ?? '',
         });
       }
     };
 
-    for (const part of chunk(hashes, HASH_CHUNK)) {
+    for (const range of seqRanges(at, HASH_CHUNK)) {
       const [outs, ins, outAddr, inAddr] = await Promise.all([
         this.run(SELECT.from(E.OutputAssets)
-          .columns('output_tx_hash', 'output_outputIndex', 'unit', 'asset_policyId', 'asset_quantity')
-          .where({ output_tx_hash: { in: part } })),
+          .columns('output_txSeq', 'output_outputIndex', 'unit', 'asset_policyId', 'asset_quantity')
+          .where({ output_txSeq: range })),
         this.run(SELECT.from(E.InputAssets)
-          .columns('input_tx_hash', 'input_inputIndex', 'unit', 'asset_policyId', 'asset_quantity')
-          .where({ input_tx_hash: { in: part } })),
-        this.run(SELECT.from(E.Outputs).columns('tx_hash', 'outputIndex', 'address_address')
-          .where({ tx_hash: { in: part } })),
-        this.run(SELECT.from(E.Inputs).columns('tx_hash', 'inputIndex', 'address_address')
-          .where({ tx_hash: { in: part } })),
+          .columns('input_txSeq', 'input_inputIndex', 'unit', 'asset_policyId', 'asset_quantity')
+          .where({ input_txSeq: range })),
+        this.run(SELECT.from(E.Outputs).columns('txSeq', 'outputIndex', 'address_address').where({ txSeq: range })),
+        this.run(SELECT.from(E.Inputs).columns('txSeq', 'inputIndex', 'address_address').where({ txSeq: range })),
       ]);
       const addrOf = (rows: any[], idxKey: string) => {
         const m = new Map<string, string>();
-        for (const r of rows) if (r.address_address) m.set(`${r.tx_hash}#${r[idxKey]}`, String(r.address_address));
+        for (const r of rows) if (r.address_address) m.set(`${String(r.txSeq)}#${r[idxKey]}`, String(r.address_address));
         return m;
       };
-      collect(outs, 'output_tx_hash', 'out', 'output_outputIndex', addrOf(outAddr, 'outputIndex'));
-      collect(ins, 'input_tx_hash', 'in', 'input_inputIndex', addrOf(inAddr, 'inputIndex'));
+      collect(outs, 'output_txSeq', 'out', 'output_outputIndex', addrOf(outAddr, 'outputIndex'));
+      collect(ins, 'input_txSeq', 'in', 'input_inputIndex', addrOf(inAddr, 'inputIndex'));
     }
     return out;
   }
 
-  /** Transaction hashes of a height range, with the block time each one belongs to. */
-  private async txTimes(fromHeight: number, toHeight: number): Promise<Map<string, { height: number; time: number }>> {
+  /** Transactions of a height range keyed by `txSeq`, in chain order, with hash and block time. */
+  private async txTimes(fromHeight: number, toHeight: number): Promise<Map<string, TxAt>> {
     const rows = await this.run(
       SELECT.from(E.Transactions)
-        .columns('hash', 'blockHeight', 'blockTime')
-        .where({ blockHeight: { between: fromHeight, and: toHeight } }),
+        .columns('hash', 'txSeq', 'blockHeight', 'blockTime')
+        .where({ blockHeight: { between: fromHeight, and: toHeight } })
+        .orderBy('txSeq asc'),
     );
-    const at = new Map<string, { height: number; time: number }>();
+    const at = new Map<string, TxAt>();
     for (const r of rows) {
       const height = num(r.blockHeight);
       const time = toUnixSeconds(r.blockTime);
-      if (height !== null && time !== null) at.set(String(r.hash), { height, time });
+      if (height !== null && time !== null && r.txSeq != null) at.set(String(r.txSeq), { hash: String(r.hash), height, time });
     }
     return at;
   }
@@ -242,40 +240,38 @@ export class CardanoSource implements ChainSource {
     if (at.size === 0) return [];
 
     const out: AddressMoveRow[] = [];
-    for (const part of chunk([...at.keys()], HASH_CHUNK)) {
+    for (const range of seqRanges(at, HASH_CHUNK)) {
       const [outputs, outAmounts, inputs, inAmounts] = await Promise.all([
-        this.run(SELECT.from(E.Outputs).columns('tx_hash', 'outputIndex', 'address_address')
-          .where({ tx_hash: { in: part } })),
-        this.run(SELECT.from(E.OutputAssets).columns('output_tx_hash', 'output_outputIndex', 'asset_quantity')
-          .where({ output_tx_hash: { in: part } }).where({ unit: 'lovelace' })),
-        this.run(SELECT.from(E.Inputs).columns('tx_hash', 'inputIndex', 'address_address')
-          .where({ tx_hash: { in: part } })),
-        this.run(SELECT.from(E.InputAssets).columns('input_tx_hash', 'input_inputIndex', 'asset_quantity')
-          .where({ input_tx_hash: { in: part } }).where({ unit: 'lovelace' })),
+        this.run(SELECT.from(E.Outputs).columns('txSeq', 'outputIndex', 'address_address').where({ txSeq: range })),
+        this.run(SELECT.from(E.OutputAssets).columns('output_txSeq', 'output_outputIndex', 'asset_quantity')
+          .where({ output_txSeq: range }).where({ unit: 'lovelace' })),
+        this.run(SELECT.from(E.Inputs).columns('txSeq', 'inputIndex', 'address_address').where({ txSeq: range })),
+        this.run(SELECT.from(E.InputAssets).columns('input_txSeq', 'input_inputIndex', 'asset_quantity')
+          .where({ input_txSeq: range }).where({ unit: 'lovelace' })),
       ]);
 
-      const amountBy = (rows: any[], hashKey: string, idxKey: string) => {
+      const amountBy = (rows: any[], seqKey: string, idxKey: string) => {
         const m = new Map<string, number>();
-        for (const r of rows) m.set(`${r[hashKey]}#${r[idxKey]}`, num(r.asset_quantity) ?? 0);
+        for (const r of rows) m.set(`${String(r[seqKey])}#${r[idxKey]}`, num(r.asset_quantity) ?? 0);
         return m;
       };
-      const outAmt = amountBy(outAmounts, 'output_tx_hash', 'output_outputIndex');
-      const inAmt = amountBy(inAmounts, 'input_tx_hash', 'input_inputIndex');
+      const outAmt = amountBy(outAmounts, 'output_txSeq', 'output_outputIndex');
+      const inAmt = amountBy(inAmounts, 'input_txSeq', 'input_inputIndex');
 
       const push = (rows: any[], idxKey: string, amounts: Map<string, number>, side: 'in' | 'out') => {
         for (const r of rows) {
-          const txHash = String(r.tx_hash);
-          const where = at.get(txHash);
+          const seq = String(r.txSeq);
+          const tx = at.get(seq);
           const address = r.address_address;
           // An input whose source output predates the crawl start has no resolved address. It is
           // still a spent UTxO, so the row is kept with an empty address and only the per-address
           // attribution is left out — dropping it here undercounted utxo.spent by 215 663 over
           // the 2026 backfill.
-          if (!where) continue;
+          if (!tx) continue;
           out.push({
-            height: where.height, time: where.time, txHash,
+            height: tx.height, time: tx.time, txHash: tx.hash,
             address: address ? String(address) : '',
-            amount: amounts.get(`${txHash}#${r[idxKey]}`) ?? 0,
+            amount: amounts.get(`${seq}#${r[idxKey]}`) ?? 0,
             side,
           });
         }
@@ -296,7 +292,9 @@ export class CardanoSource implements ChainSource {
     const out: StakeActivity = { certificates: [], withdrawals: [] };
     if (at.size === 0) return out;
 
-    for (const part of chunk([...at.keys()], HASH_CHUNK)) {
+    // both tables keep the transaction hash as their key
+    const byHash = new Map([...at.values()].map(t => [t.hash, t] as const));
+    for (const part of chunk([...byHash.keys()], HASH_CHUNK)) {
       const [certs, withdrawals] = await Promise.all([
         this.run(SELECT.from(E.Certificates).columns('tx_hash', 'certIndex', 'kind', 'stakeAddress', 'poolId', 'drepId', 'deposit', 'epoch')
           .where({ tx_hash: { in: part } })),
@@ -304,7 +302,7 @@ export class CardanoSource implements ChainSource {
           .where({ tx_hash: { in: part } })),
       ]);
       for (const r of certs) {
-        const where = at.get(String(r.tx_hash));
+        const where = byHash.get(String(r.tx_hash));
         if (!where || !r.kind) continue;
         out.certificates.push({
           height: where.height, time: where.time, txHash: String(r.tx_hash), kind: String(r.kind),
@@ -316,7 +314,7 @@ export class CardanoSource implements ChainSource {
         });
       }
       for (const r of withdrawals) {
-        const where = at.get(String(r.tx_hash));
+        const where = byHash.get(String(r.tx_hash));
         if (!where || !r.stakeAddress) continue;
         out.withdrawals.push({
           height: where.height, time: where.time, txHash: String(r.tx_hash),

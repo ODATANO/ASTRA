@@ -21,7 +21,7 @@ import { CycleTimeoutError, cycleTimeoutMs, withCycleTimeout } from '../srv/aggr
 import { applyEntityDeltas, prune } from '../srv/aggregator/store';
 import { addToEntity, type EntityDeltaMap } from '../srv/aggregator/samples';
 
-const { INSERT, UPSERT, SELECT, DELETE } = cds.ql;
+const { INSERT, UPSERT, UPDATE, SELECT, DELETE } = cds.ql;
 const hex = (n: number) => Array.from({ length: n }, (_, i) => ((i * 7 + n) % 16).toString(16)).join('');
 
 let now: number;
@@ -49,7 +49,7 @@ async function seedCardano(db: any, fromHeight: number, count: number, startSec:
     rows.push({ hash, time: new Date(t * 1000).toISOString(), height: h, slot: h * 20, size: 1000 + n * 300, txCount: n, fees: n * 200_000 });
     // size stays null: ODATANO's crawler cannot report it (Ogmios chain-sync omits the
     // serialized size), so a fixture with a number would test a column that is never filled
-    for (let i = 0; i < n; i++) txs.push({ hash: `${hash}-${i}`, blockHash: hash, blockHeight: h, blockTime: t, slot: h * 20, txIndex: i, fee: 200_000 + i * 1000, size: null, hasMetadata: i === 0 });
+    for (let i = 0; i < n; i++) txs.push({ hash: `${hash}-${i}`, txSeq: h * 20 * 65536 + i, blockHash: hash, blockHeight: h, blockTime: t, slot: h * 20, txIndex: i, fee: 200_000 + i * 1000, size: null, hasMetadata: i === 0 });
   }
   await db.run(INSERT.into('odatano.cardano.Blocks').entries(rows));
   await db.run(INSERT.into('odatano.cardano.Transactions').entries(txs));
@@ -170,8 +170,9 @@ describe('midnight aggregation over the NIGHTGATE schema', () => {
     expect(fees.sum).toBe(1_200_000);
     const err = await computeWindow(cds.db, 'midnight', 'fees.estimateError', '1h', t);
     expect(err.avg).toBe(20000);
+    // shielded and proof flags are set by the source's decode pass; this source has none
     const shielded = await computeWindow(cds.db, 'midnight', 'tx.shielded', '1h', t);
-    expect(shielded.count).toBe(5);
+    expect(shielded.count).toBe(0);
     const empty = await computeWindow(cds.db, 'midnight', 'blocks.empty', '1h', t);
     expect(empty.count).toBe(10);
     const interval = await computeWindow(cds.db, 'midnight', 'blocks.interval', '1h', t);
@@ -250,17 +251,18 @@ describe('token metrics and leaderboards', () => {
       const height = fromHeight + i;
       const t = startSec + i * 20;
       const hash = `tx${i}`.padEnd(64, '0');
+      const txSeq = height * 20 * 65536; // slot * 65536 + txIndex, as ODATANO keys the I/O rows
       blocks.push({ hash: `b${i}`.padEnd(64, '0'), time: new Date(t * 1000).toISOString(), height, slot: height * 20, size: 500, txCount: 1, fees: 170000, slotLeader: PRODUCER });
-      txs.push({ hash, blockHash: `b${i}`.padEnd(64, '0'), blockHeight: height, blockTime: t, slot: height * 20, txIndex: 0, fee: 170000, size: null, hasMetadata: false });
-      outs.push({ tx_hash: hash, outputIndex: 0, address_address: SCRIPT_ADDR });
-      outAssets.push({ output_tx_hash: hash, output_outputIndex: 0, unit: UNIT, asset_policyId: POLICY, asset_quantity: String(outQty) });
+      txs.push({ hash, txSeq, blockHash: `b${i}`.padEnd(64, '0'), blockHeight: height, blockTime: t, slot: height * 20, txIndex: 0, fee: 170000, size: null, hasMetadata: false });
+      outs.push({ txSeq, outputIndex: 0, address_address: SCRIPT_ADDR });
+      outAssets.push({ output_txSeq: txSeq, output_outputIndex: 0, unit: UNIT, asset_policyId: POLICY, asset_quantity: String(outQty) });
       // lovelace rides along on every output and must never reach a token leaderboard
-      outAssets.push({ output_tx_hash: hash, output_outputIndex: 0, unit: 'lovelace', asset_policyId: '', asset_quantity: '2000000' });
+      outAssets.push({ output_txSeq: txSeq, output_outputIndex: 0, unit: 'lovelace', asset_policyId: '', asset_quantity: '2000000' });
       if (inQty > 0) {
         // the last transaction spends an input the crawler could not resolve (its output
         // predates the crawl start), so it carries no address
-        ins.push({ tx_hash: hash, inputIndex: 0, address_address: i === 2 ? null : USER_ADDR });
-        inAssets.push({ input_tx_hash: hash, input_inputIndex: 0, unit: UNIT, asset_policyId: POLICY, asset_quantity: String(inQty) });
+        ins.push({ txSeq, inputIndex: 0, address_address: i === 2 ? null : USER_ADDR });
+        inAssets.push({ input_txSeq: txSeq, input_inputIndex: 0, unit: UNIT, asset_policyId: POLICY, asset_quantity: String(inQty) });
       }
     });
 
@@ -435,6 +437,7 @@ describe('certificates and withdrawals', () => {
     await db.run(INSERT.into('odatano.cardano.TransactionWithdrawals').entries([
       { tx_hash: t1, stakeAddress: STAKE, lovelace: '1500000' },
       { tx_hash: t3, stakeAddress: STAKE, lovelace: '2500000' },
+      { tx_hash: t2, stakeAddress: 'stake_test17' + 'e'.repeat(50), lovelace: '0' },
     ]));
 
     const agg = new ChainAggregator('cardano', new CardanoSource(db), {
@@ -451,7 +454,8 @@ describe('certificates and withdrawals', () => {
     expect(await count('certs.voteDelegations')).toBe(2);
     expect(await count('certs.poolRetirements')).toBe(1);
     expect(await count('certs.other')).toBe(1);
-    expect(await count('withdrawals.count')).toBe(2);
+    expect(await count('withdrawals.count')).toBe(3);
+    expect(await count('withdrawals.zero')).toBe(1);
     expect((await computeWindow(cds.db, 'cardano', 'withdrawals.value', '24h', at)).sum).toBeCloseTo(4, 6);
 
     const pools = await getLeaderboard(cds.db, 'cardano', 'pool', 'stake.delegations', '24h', 10, 'count', at);
@@ -675,6 +679,45 @@ describe('a cycle the scheduler gives up on', () => {
     expect(r.skipped).toBeUndefined();
     expect((await agg.getCursor())?.lastHeight).toBe(219);
   });
+
+  it('discards a chunk whose cursor a recompute moved meanwhile, so the rewind is not overwritten', async () => {
+    await cds.db.run(DELETE.from('odatano.astra.ChainCursors').where({ chain: 'cardano' }));
+    await cds.db.run(DELETE.from('odatano.astra.MetricBuckets').where({ chain: 'cardano' }));
+    await cds.db.run(DELETE.from('odatano.astra.EntityBuckets').where({ chain: 'cardano' }));
+    const db = await connectSource('cardano', sqliteFile('cardano-cas.sqlite'));
+    const startSec = Math.floor(now / 60000) * 60 - 7200;
+    await seedCardano(db, 100, 120, startSec);
+    const opts = {
+      chunkBlocks: 40, startTime: new Date((startSec - 60) * 1000).toISOString(), leaseMs: 60000,
+      retention: { minuteHours: 48, hourDays: 90 }, log: { info() {}, warn() {} },
+    };
+    const source = new CardanoSource(db);
+    const agg = new ChainAggregator('cardano', source, opts);
+    const realGetBlocks = source.getBlocks.bind(source);
+    let reads = 0;
+    let release!: () => void;
+    const gate = new Promise<void>(res => { release = res; });
+    source.getBlocks = async (from: number, to: number) => {
+      reads++;
+      if (reads === 2) { await gate; }
+      return realGetBlocks(from, to);
+    };
+    const cycle = agg.runCycle(60000);
+    await new Promise(r => setTimeout(r, 50));
+    // The admin recompute goes through another instance, so only the cursor tells the cycle.
+    await new ChainAggregator('cardano', new CardanoSource(db), opts).recompute(110);
+    release();
+    await expect(cycle).rejects.toThrow(/no longer 139/);
+    // the rewind goes back to its bucket boundary; the late chunk must not have moved it to 179
+    expect((await agg.getCursor())?.lastHeight).toBeLessThan(110);
+
+    source.getBlocks = realGetBlocks;
+    await agg.releaseLease();
+    await agg.runCycle(60000);
+    expect((await agg.getCursor())?.lastHeight).toBe(219);
+    const days = await cds.db.run(SELECT.from('odatano.astra.MetricBuckets').where({ chain: 'cardano', granularity: 'day', metricId: 'blocks.count' }));
+    expect(days.reduce((s: number, d: any) => s + Number(d.count), 0)).toBe(120);
+  });
 });
 
 describe('entity buckets', () => {
@@ -800,5 +843,227 @@ describe('fees filled in after the block (Midnight supplement)', () => {
     expect((await agg.getCursor())?.feeHeight).toBeNull();
     await agg.runCycle(60000);
     expect((await computeWindow(cds.db, 'midnight', 'fees.paid', '1h', t)).sum).toBe(30 * FEE);
+  });
+});
+
+describe('facts decoded from the ledger payload after the block (Midnight decode pass)', () => {
+  const CONTRACT = 'c0'.repeat(32);
+  const DUST = 300_000_000_000_000; // 0.3 DUST in specks
+  async function seedMidnight(db: any, from: number, to: number, startMs: number): Promise<number> {
+    let t = startMs;
+    for (let h = from; h <= to; h++) {
+      t += 6000;
+      const id = cds.utils.uuid();
+      await db.run(INSERT.into('midnight.Blocks').entries({ ID: id, hash: hex(64) + h, height: h, protocolVersion: 1, timestamp: t, author: 'a', ledgerParameters: 'l' }));
+      const tx = cds.utils.uuid();
+      await db.run(INSERT.into('midnight.Transactions').entries({
+        ID: tx, transactionId: 1, hash: 'd' + h, protocolVersion: 1, transactionType: 'REGULAR', txType: 'contract_call',
+        size: 800, block_ID: id, contractAddress: CONTRACT,
+      }));
+      await db.run(INSERT.into('midnight.Transactions').entries({
+        ID: cds.utils.uuid(), transactionId: 0, hash: 's' + h, protocolVersion: 1, transactionType: 'SYSTEM', block_ID: id,
+      }));
+    }
+    return t;
+  }
+  /** What the source's decode pass writes for the blocks up to `height`. */
+  async function decode(db: any, from: number, to: number) {
+    for (let h = from; h <= to; h++) {
+      await db.run(UPDATE.entity('midnight.Transactions').set({
+        payloadDecode: 'decoded', dustConsumed: String(DUST), dustSpendCount: 1, dustRegistrationCount: 0,
+        zswapInputCount: h % 2, zswapOutputCount: 2, zswapTransientCount: 0, circuitName: h % 3 === 0 ? 'claim' : 'increment',
+        isShielded: true, hasProof: h % 3 === 0,
+      }).where({ hash: 'd' + h }));
+      await db.run(UPDATE.entity('midnight.Transactions').set({ payloadDecode: 'absent' }).where({ hash: 's' + h }));
+    }
+  }
+  const syncState = (db: any, decoded: number | null, indexed = 629) =>
+    db.run(UPSERT.into('midnight.SyncState').entries({ ID: 'SINGLETON', networkId: 'preview', lastIndexedHeight: indexed, chainHeight: indexed, lastSupplementedHeight: indexed, lastDecodedHeight: decoded, syncStatus: 'synced' }));
+  const reset = async () => {
+    await cds.db.run(DELETE.from('odatano.astra.ChainCursors').where({ chain: 'midnight' }));
+    await cds.db.run(DELETE.from('odatano.astra.MetricBuckets').where({ chain: 'midnight' }));
+    await cds.db.run(DELETE.from('odatano.astra.EntityBuckets').where({ chain: 'midnight' }));
+  };
+  const opts = (startMs: number) => ({
+    chunkBlocks: 8, startTime: new Date(startMs).toISOString(), leaseMs: 60000,
+    retention: { minuteHours: 48, hourDays: 90 }, log: { info() {}, warn() {} },
+  });
+
+  it('counts decoded facts only up to the decoded height, then catches up once', async () => {
+    await reset();
+    const db = await connectSource('midnight', sqliteFile('midnight-decode.sqlite'));
+    const startMs = now - 30 * 60_000;
+    const t = await seedMidnight(db, 600, 629, startMs);
+    await decode(db, 600, 614);
+    await syncState(db, 614);
+    const agg = new ChainAggregator('midnight', new MidnightSource(db), opts(startMs));
+    await agg.runCycle(60000);
+
+    let c = await agg.getCursor();
+    expect(c?.lastHeight).toBe(629);
+    expect(c?.decodeHeight).toBe(614);
+    expect(c?.sourceDecodeHeight).toBe(614);
+    expect((await computeWindow(cds.db, 'midnight', 'tx.decoded', '1h', t)).count).toBe(15);
+    // the type counts wait for the decode pass as well
+    expect((await computeWindow(cds.db, 'midnight', 'tx.contractCalls', '1h', t)).count).toBe(15);
+
+    await decode(db, 615, 629);
+    await syncState(db, 629);
+    const r = await agg.runCycle(60000);
+    expect(r.decodeBlocks).toBe(15);
+    c = await agg.getCursor();
+    expect(c?.decodeHeight).toBe(629);
+
+    // system transactions are never counted, every regular one once
+    expect((await computeWindow(cds.db, 'midnight', 'tx.decoded', '1h', t)).count).toBe(30);
+    const dust = await computeWindow(cds.db, 'midnight', 'dust.consumed', '1h', t);
+    expect(dust.count).toBe(30);
+    expect(dust.sum).toBeCloseTo(30 * DUST / 1e15, 9); // carried in DUST
+    expect(dust.max).toBeCloseTo(0.3, 12);
+    expect((await computeWindow(cds.db, 'midnight', 'dust.spends', '1h', t)).count).toBe(30);
+    expect((await computeWindow(cds.db, 'midnight', 'zswap.outputs', '1h', t)).count).toBe(60);
+    expect((await computeWindow(cds.db, 'midnight', 'zswap.inputs', '1h', t)).count).toBe(15);
+    expect((await computeWindow(cds.db, 'midnight', 'tx.zswap', '1h', t)).count).toBe(30);
+    expect((await computeWindow(cds.db, 'midnight', 'tx.shielded', '1h', t)).count).toBe(30);
+    expect((await computeWindow(cds.db, 'midnight', 'tx.withProof', '1h', t)).count).toBe(10);
+    expect((await computeWindow(cds.db, 'midnight', 'tx.count', '1h', t)).count).toBe(30);
+    expect((await computeWindow(cds.db, 'midnight', 'tx.contractCalls', '1h', t)).count).toBe(30);
+
+    const contracts = await getLeaderboard(cds.db, 'midnight', 'contract', 'contract.calls', '24h', 10, 'count', t);
+    expect(contracts.rows.map(r => [r.entityId, r.count])).toEqual([[CONTRACT, 30]]);
+    const circuits = await getLeaderboard(cds.db, 'midnight', 'circuit', 'circuit.calls', '24h', 10, 'count', t);
+    expect(circuits.rows.map(r => [r.entityId, r.count])).toEqual([['increment', 20], ['claim', 10]]);
+  });
+
+  it('rewinds with a recompute and starts over after a full one', async () => {
+    await reset();
+    const db = await connectSource('midnight', sqliteFile('midnight-decode-2.sqlite'));
+    const startMs = now - 30 * 60_000;
+    const t = await seedMidnight(db, 600, 629, startMs);
+    await decode(db, 600, 629);
+    await syncState(db, 629);
+    const agg = new ChainAggregator('midnight', new MidnightSource(db), opts(startMs));
+    await agg.runCycle(60000);
+    expect((await agg.getCursor())?.decodeHeight).toBe(629);
+
+    await agg.recompute(615);
+    const rewound = await agg.getCursor();
+    expect(rewound?.decodeHeight).toBeLessThanOrEqual(614);
+    expect(rewound?.decodeHeight).toBe(rewound?.lastHeight);
+    await agg.runCycle(60000);
+    expect((await computeWindow(cds.db, 'midnight', 'tx.decoded', '1h', t)).count).toBe(30);
+    const circuits = await getLeaderboard(cds.db, 'midnight', 'circuit', 'circuit.calls', '24h', 10, 'count', t);
+    expect(circuits.rows.reduce((s, r) => s + r.count, 0)).toBe(30);
+
+    await agg.recompute(null);
+    expect((await agg.getCursor())?.decodeHeight).toBeNull();
+    await agg.runCycle(60000);
+    expect((await computeWindow(cds.db, 'midnight', 'dust.consumed', '1h', t)).sum).toBeCloseTo(30 * DUST / 1e15, 9);
+  });
+
+  it('counts a transaction by the type the decode pass settled', async () => {
+    await reset();
+    const db = await connectSource('midnight', sqliteFile('midnight-decode-4.sqlite'));
+    const startMs = now - 30 * 60_000;
+    const t = await seedMidnight(db, 600, 609, startMs);
+    await decode(db, 600, 609);
+    // the source retypes call-free transactions while decoding; an undecodable one keeps its type
+    await db.run(UPDATE.entity('midnight.Transactions').set({ txType: 'shielded_transfer' }).where({ hash: { in: ['d600', 'd601', 'd602'] } }));
+    await db.run(UPDATE.entity('midnight.Transactions').set({ txType: 'contract_deploy', payloadDecode: 'failed' }).where({ hash: 'd603' }));
+    await syncState(db, 609, 609);
+    const agg = new ChainAggregator('midnight', new MidnightSource(db), opts(startMs));
+    await agg.runCycle(60000);
+
+    expect((await computeWindow(cds.db, 'midnight', 'tx.count', '1h', t)).count).toBe(10);
+    expect((await computeWindow(cds.db, 'midnight', 'tx.contractCalls', '1h', t)).count).toBe(6);
+    expect((await computeWindow(cds.db, 'midnight', 'tx.contractDeploys', '1h', t)).count).toBe(1);
+    expect((await computeWindow(cds.db, 'midnight', 'tx.decoded', '1h', t)).count).toBe(9);
+  });
+
+  it('follows a source that lowers its decoded height and decodes a range again', async () => {
+    await reset();
+    const db = await connectSource('midnight', sqliteFile('midnight-decode-5.sqlite'));
+    const startMs = now - 30 * 60_000;
+    const t = await seedMidnight(db, 600, 629, startMs);
+    await decode(db, 600, 629);
+    await syncState(db, 629);
+    const agg = new ChainAggregator('midnight', new MidnightSource(db), opts(startMs));
+    await agg.runCycle(60000);
+    expect((await computeWindow(cds.db, 'midnight', 'tx.contractCalls', '1h', t)).count).toBe(30);
+
+    await syncState(db, 619);
+    await agg.runCycle(60000);
+    expect((await agg.getCursor())?.decodeHeight).toBe(619);
+    expect((await computeWindow(cds.db, 'midnight', 'tx.decoded', '1h', t)).count).toBe(20);
+    // the block pass metrics stay
+    expect((await computeWindow(cds.db, 'midnight', 'tx.count', '1h', t)).count).toBe(30);
+
+    await db.run(UPDATE.entity('midnight.Transactions').set({ txType: 'shielded_transfer' }).where({ hash: { in: ['d620', 'd621', 'd622'] } }));
+    await syncState(db, 629);
+    await agg.runCycle(60000);
+    expect((await agg.getCursor())?.decodeHeight).toBe(629);
+    expect((await computeWindow(cds.db, 'midnight', 'tx.decoded', '1h', t)).count).toBe(30);
+    expect((await computeWindow(cds.db, 'midnight', 'tx.contractCalls', '1h', t)).count).toBe(27);
+    const contracts = await getLeaderboard(cds.db, 'midnight', 'contract', 'contract.calls', '24h', 10, 'count', t);
+    expect(contracts.rows.map(r => [r.entityId, r.count])).toEqual([[CONTRACT, 27]]);
+  });
+
+  it('leaves the decoded metrics alone when the source has no decode pass', async () => {
+    await reset();
+    const db = await connectSource('midnight', sqliteFile('midnight-decode-3.sqlite'));
+    const startMs = now - 30 * 60_000;
+    const t = await seedMidnight(db, 600, 609, startMs);
+    await syncState(db, null, 609);
+    const agg = new ChainAggregator('midnight', new MidnightSource(db), opts(startMs));
+    const r = await agg.runCycle(60000);
+    expect(r.decodeBlocks).toBe(0);
+    expect((await agg.getCursor())?.decodeHeight).toBe(599);
+    expect((await computeWindow(cds.db, 'midnight', 'tx.decoded', '1h', t)).count).toBe(0);
+    expect((await computeWindow(cds.db, 'midnight', 'tx.contractCalls', '1h', t)).count).toBe(0);
+  });
+});
+
+describe('epoch rankings and a full recompute', () => {
+  it('keeps the pool and DRep rankings through a full recompute, and rewrites them when they are gone', async () => {
+    resetSourceCache();
+    const db = await connectSource('cardano', sqliteFile('cardano-epoch-recompute.sqlite'));
+    for (const e of ['EntityBuckets', 'MetricBuckets', 'Snapshots', 'ChainCursors']) {
+      await cds.db.run(DELETE.from(`odatano.astra.${e}`).where({ chain: 'cardano' }));
+    }
+    const startSec = Math.floor(now / 60000) * 60 - 1800;
+    await seedCardano(db, 100, 20, startSec);
+    await db.run(INSERT.into('odatano.cardano.PoolEpochSnapshots').entries({
+      poolId: 'pool_one'.padEnd(56, 'a'), epoch: 50, snapshotSlot: 1, snapshotTime: startSec,
+      blocksMinted: 1, blocksEpoch: 1, liveStake: '200000000', liveSize: 0.1, liveSaturation: 0.5, liveDelegators: 1,
+      activeStake: '200000000', activeSize: 0.1, pledge: '0', margin: 0.02, fixedCost: '340000000',
+    }));
+    await db.run(INSERT.into('odatano.cardano.DrepEpochSnapshots').entries({
+      drepId: 'drep_one'.padEnd(58, 'd'), epoch: 50, snapshotSlot: 1, snapshotTime: startSec, amount: '70000000',
+      hasScript: false, lastActiveEpoch: 50, retired: false, expired: false,
+    }));
+    const agg = new ChainAggregator('cardano', new CardanoSource(db), {
+      chunkBlocks: 50, startTime: new Date((startSec - 60) * 1000).toISOString(), leaseMs: 60000,
+      retention: { minuteHours: 48, hourDays: 90 }, log: { info() {}, warn() {} },
+    });
+    const ranked = async () => ({
+      pools: (await getLeaderboard(cds.db, 'cardano', 'pool', 'stake.live', 'epoch', 10, 'sum')).rows.map(r => r.entityId),
+      dreps: (await getLeaderboard(cds.db, 'cardano', 'drep', 'governance.votingPower', 'epoch', 10, 'sum')).rows.map(r => r.entityId),
+    });
+    const expected = { pools: ['pool_one'.padEnd(56, 'a')], dreps: ['drep_one'.padEnd(58, 'd')] };
+
+    await agg.runCycle(60000);
+    expect(await ranked()).toEqual(expected);
+
+    // the block walk that follows a full recompute never writes epoch rows back
+    await agg.recompute(null);
+    expect(await ranked()).toEqual(expected);
+    await agg.runCycle(60000);
+    expect(await ranked()).toEqual(expected);
+
+    // rows lost while the gauges still name the epoch: the next cycle copies it again
+    await cds.db.run(DELETE.from('odatano.astra.EntityBuckets').where({ chain: 'cardano', granularity: 'epoch' }));
+    expect((await ranked()).pools).toEqual([]);
+    await agg.runCycle(60000);
+    expect(await ranked()).toEqual(expected);
   });
 });

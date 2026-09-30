@@ -60,7 +60,7 @@ export function addToDelta(map: DeltaMap, metricId: string, timeSec: number, val
  */
 const LOVELACE_PER_ADA = 1_000_000;
 /** Leaderboard dimensions, mirroring db/schema.cds. */
-export type Dimension = 'token' | 'policy' | 'script' | 'address' | 'producer' | 'pool' | 'drep' | 'tokenHolder';
+export type Dimension = 'token' | 'policy' | 'script' | 'address' | 'producer' | 'pool' | 'drep' | 'tokenHolder' | 'contract' | 'circuit';
 
 /** One entity's counter inside one period — the per-entity counterpart of BucketAcc. */
 export interface EntityAcc {
@@ -217,6 +217,8 @@ const CERT_METRIC: Record<string, string> = {
  * delegation counts for its pool (`stake.delegations`), a vote delegation for its DRep
  * (`governance.voteDelegations`, the always-abstain / no-confidence choices included, they are
  * targets too). Withdrawals carry their ADA; a deposit is not a movement and is not summed.
+ * A 0-ADA withdrawal (a script stake credential running its validator) also counts under
+ * `withdrawals.zero`.
  */
 export function computeStakeDeltas(
   activity: StakeActivity,
@@ -231,6 +233,7 @@ export function computeStakeDeltas(
   for (const w of activity.withdrawals) {
     addToDelta(deltas, 'withdrawals.count', w.time, 1, w.height);
     addToDelta(deltas, 'withdrawals.value', w.time, w.lovelace / LOVELACE_PER_ADA, w.height);
+    if (w.lovelace === 0) addToDelta(deltas, 'withdrawals.zero', w.time, 1, w.height);
   }
 }
 
@@ -240,6 +243,8 @@ export interface SampleContext {
   prevBlockTime: number | null;
   /** false when the fees arrive later and are aggregated by their own pass (computeFeeDeltas). */
   fees?: boolean;
+  /** false when the source settles a transaction's type in its decode pass (computeDecodeDeltas). */
+  txTypes?: boolean;
 }
 
 /** Metrics that come from a transaction's fee; a source that fills fees in late owns them in a pass of their own. */
@@ -265,6 +270,65 @@ export function computeFeeDeltas(txs: TxRow[], chain: Chain): DeltaMap {
   return deltas;
 }
 
+/** Metrics from the facts a source decodes from the ledger payload after the block (Midnight). */
+export const DECODE_METRICS = [
+  'tx.decoded', 'tx.zswap', 'dust.consumed', 'dust.spends', 'dust.registrations',
+  'zswap.inputs', 'zswap.outputs', 'zswap.transients', 'tx.shielded', 'tx.withProof',
+  'tx.contractCalls', 'tx.contractDeploys',
+] as const;
+/** Leaderboard dimensions the decode pass owns. */
+export const DECODE_DIMENSIONS: readonly Dimension[] = ['contract', 'circuit'];
+
+/** DUST, not specks: 3e14 specks per transaction squared overflow the Decimal(38,6) sumSq. */
+const SPECKS_PER_DUST = 1e15;
+
+/** Contract calls and deploys by the transaction's type. */
+function addTxTypeSamples(deltas: DeltaMap, tx: TxRow): void {
+  const type = tx.flags?.txType;
+  if (type === 'contract_call') addToDelta(deltas, 'tx.contractCalls', tx.time, 1, tx.height);
+  if (type === 'contract_deploy') addToDelta(deltas, 'tx.contractDeploys', tx.time, 1, tx.height);
+}
+
+/** Counters count events: a transaction with n of them adds n samples of 1. */
+function addCount(deltas: DeltaMap, metricId: string, tx: TxRow, n: unknown): void {
+  const count = typeof n === 'number' && Number.isFinite(n) ? Math.floor(n) : 0;
+  for (let i = 0; i < count; i++) addToDelta(deltas, metricId, tx.time, 1, tx.height);
+}
+
+/**
+ * Deltas of the decode pass. The type counts take every REGULAR transaction, the decoded facts
+ * only those the source decoded; the contract and circuit leaderboards take contract calls
+ * with their circuit (Midnight).
+ */
+export function computeDecodeDeltas(txs: TxRow[]): { deltas: DeltaMap; entities: EntityDeltaMap } {
+  const deltas: DeltaMap = new Map();
+  const entities: EntityDeltaMap = new Map();
+  for (const tx of txs) {
+    const f = tx.flags || {};
+    if (f.system) continue;
+    // the type stands once the pass is through, decoded or not
+    addTxTypeSamples(deltas, tx);
+    if (!f.decoded) continue;
+    addToDelta(deltas, 'tx.decoded', tx.time, 1, tx.height);
+    if (typeof f.dustConsumed === 'number') addToDelta(deltas, 'dust.consumed', tx.time, f.dustConsumed / SPECKS_PER_DUST, tx.height);
+    addCount(deltas, 'dust.spends', tx, f.dustSpends);
+    addCount(deltas, 'dust.registrations', tx, f.dustRegistrations);
+    addCount(deltas, 'zswap.inputs', tx, f.zswapInputs);
+    addCount(deltas, 'zswap.outputs', tx, f.zswapOutputs);
+    addCount(deltas, 'zswap.transients', tx, f.zswapTransients);
+    const zswap = [f.zswapInputs, f.zswapOutputs, f.zswapTransients].some(v => typeof v === 'number' && v > 0);
+    if (zswap) addToDelta(deltas, 'tx.zswap', tx.time, 1, tx.height);
+    // the source sets both flags only once it decoded the payload
+    if (f.isShielded) addToDelta(deltas, 'tx.shielded', tx.time, 1, tx.height);
+    if (f.hasProof) addToDelta(deltas, 'tx.withProof', tx.time, 1, tx.height);
+    if (f.txType === 'contract_call') {
+      if (typeof f.contract === 'string' && f.contract) addToEntity(entities, 'contract', f.contract, 'contract.calls', tx.time, 1, tx.height);
+      if (typeof f.circuit === 'string' && f.circuit) addToEntity(entities, 'circuit', f.circuit, 'circuit.calls', tx.time, 1, tx.height);
+    }
+  }
+  return { deltas, entities };
+}
+
 /**
  * Computes the minute deltas for a contiguous chunk of blocks and their transactions.
  * Returns the deltas and the time of the last block (next chunk's prevBlockTime).
@@ -279,6 +343,7 @@ export function computeDeltas(
   const txPerBlock = new Map<number, number>();
   const isMidnight = ctx.chain === 'midnight';
   const withFees = ctx.fees !== false;
+  const withTxTypes = ctx.txTypes !== false;
 
   for (const tx of txs) {
     const f = tx.flags || {};
@@ -292,10 +357,7 @@ export function computeDeltas(
     if (withFees) addFeeSamples(deltas, tx, isMidnight);
 
     if (isMidnight) {
-      if (f.isShielded) addToDelta(deltas, 'tx.shielded', tx.time, 1, tx.height);
-      if (f.hasProof) addToDelta(deltas, 'tx.withProof', tx.time, 1, tx.height);
-      if (f.txType === 'contract_call') addToDelta(deltas, 'tx.contractCalls', tx.time, 1, tx.height);
-      if (f.txType === 'contract_deploy') addToDelta(deltas, 'tx.contractDeploys', tx.time, 1, tx.height);
+      if (withTxTypes) addTxTypeSamples(deltas, tx);
       if (f.status === 'FAILURE') addToDelta(deltas, 'tx.failed', tx.time, 1, tx.height);
     } else if (f.hasMetadata) {
       addToDelta(deltas, 'tx.withMetadata', tx.time, 1, tx.height);

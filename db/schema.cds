@@ -83,6 +83,8 @@ type Dimension   : String(12) enum {
   pool;     // a stake pool, keyed by its bech32 pool id (epoch snapshots)
   drep;     // a delegated representative, keyed by its bech32 drep id (epoch snapshots)
   tokenHolder; // an address seen moving ONE token: entityId = address, subjectId = unit
+  contract; // a contract, keyed by its address (Midnight)
+  circuit;  // a circuit name, across contracts (Midnight)
 }
 
 /**
@@ -152,6 +154,10 @@ entity ChainCursors {
       feeHeight           : Integer64; // last height whose fees are aggregated; null = pass not started
       feeBlockTime        : Integer64; // unix seconds of the newest block the fee pass has covered
       sourceFeeHeight     : Integer64; // last height whose fees the source has filled in
+      // Facts the source decodes from the ledger payload after the block (Midnight), same scheme.
+      decodeHeight        : Integer64; // last height whose decoded facts are aggregated; null = pass not started
+      decodeBlockTime     : Integer64; // unix seconds of the newest block the decode pass has covered
+      sourceDecodeHeight  : Integer64; // last height the source has decoded
       backfilling         : Boolean default true;
       lastRunAt           : Timestamp;
       lastRunMs           : Integer;

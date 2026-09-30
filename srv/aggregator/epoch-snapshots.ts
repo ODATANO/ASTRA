@@ -91,6 +91,12 @@ export async function applyEpochSnapshots(
   return { entities: rows.length, gauges: gaugeRows.length };
 }
 
+/** Whether any epoch leaderboard row of the chain exists; the gauges alone do not say so. */
+export async function hasEpochEntities(db: any, chain: Chain): Promise<boolean> {
+  const r = await db.run(SELECT.one.from(ENTITIES).columns('bucketStart').where({ chain, granularity: 'epoch' }));
+  return !!r;
+}
+
 /** Highest epoch ASTRA has already copied, from its own gauge rows. */
 export async function lastIngestedEpoch(db: any, chain: Chain): Promise<number | null> {
   const rows = await db.run(

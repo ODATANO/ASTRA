@@ -24,6 +24,8 @@ export interface SourceTip {
    * with the block.
    */
   feeHeight?: number | null;
+  /** Same scheme for facts the source decodes from the ledger payload after the block. */
+  decodeHeight?: number | null;
 }
 
 export interface BlockRow {

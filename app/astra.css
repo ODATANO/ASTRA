@@ -188,6 +188,31 @@ h3 { font-size: 1.02rem; font-weight: 700; letter-spacing: -.01em; }
 .chart-head { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
 .chart-head .sub { font-size: .82rem; color: var(--ink-3); }
 .chart-head .tools { margin-left: auto; }
+/* chain logo in front of a card title, and as the title of a single-chain section head */
+.chain-mark { display: inline-flex; align-items: center; flex: none; }
+.chain-mark img { width: auto; display: block; }
+.chart-head:has(.chain-mark) { align-items: center; justify-content: flex-start; column-gap: .7rem; }
+.chart-head .chain-mark img { height: 16px; }
+.chart-head .chain-mark + h3 { flex: 1; }
+.section-head:has(.chain-mark) { align-items: center; }
+.section-head .chain-mark img { height: 22px; }
+@media (max-width: 760px) { .chart-head .chain-mark img { height: 14px; } .section-head .chain-mark img { height: 18px; } }
+/* folding sections */
+.fold { all: unset; cursor: pointer; display: inline-flex; align-items: center; gap: .45rem; font: inherit; color: inherit; }
+.fold svg { width: 1em; height: 1em; flex: none; color: var(--ink-3); transition: transform .2s ease; }
+.fold:hover svg { color: var(--accent); }
+.fold:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 6px; }
+.section.folded .fold svg { transform: rotate(-90deg); }
+.section.folded > :not(.section-head) { display: none; }
+.section.folded .section-head { margin-bottom: 0; }
+/* a section as a framed panel; its head bar is the fold handle */
+main > .section.panel { margin-top: 1.5rem; background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--r-xl); padding: 0 1.25rem 1.25rem; box-shadow: var(--shadow-sm); }
+.panel > .section-head { cursor: pointer; margin: 0 -1.25rem 1.25rem; padding: 1rem 1.25rem; border-bottom: 1px solid var(--border); border-radius: var(--r-xl) var(--r-xl) 0 0; user-select: none; }
+.panel > .section-head:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); }
+.panel.folded { padding-bottom: 0; }
+.panel.folded > .section-head { margin-bottom: 0; border-bottom: 0; border-radius: var(--r-xl); }
+.subhead { font-size: 1.05rem; font-weight: 700; letter-spacing: -.01em; margin-top: .75rem; color: var(--ink-2); }
+@media (max-width: 760px) { main > .section.panel { padding: 0 .75rem .75rem; } .panel > .section-head { margin: 0 -.75rem 1rem; padding: .85rem .75rem; } }
 /* product cards: coloured top edge in the chain's series colour */
 .product { border-top: 4px solid var(--series-cardano); }
 .product.midnight { border-top-color: var(--series-midnight); }
@@ -234,11 +259,12 @@ h3 { font-size: 1.02rem; font-weight: 700; letter-spacing: -.01em; }
 .chart .plot .hit { fill: transparent; }
 .chart .plot .cross { stroke: var(--ink-3); stroke-width: 1; pointer-events: none; }
 .chart .plot .hit-cross { fill: transparent; cursor: crosshair; }
-.chart.loading .plot, .card.loading .table-wrap, .card.loading .stats { opacity: .45; transition: opacity .2s; }
+body:not(.quiet) .chart.loading .plot, body:not(.quiet) .card.loading .table-wrap, body:not(.quiet) .card.loading .stats { opacity: .45; transition: opacity .2s; }
 .chart .legend { display: flex; flex-wrap: wrap; gap: .4rem 1rem; font-size: .8rem; color: var(--ink-2); margin-top: .5rem; }
 .chart .legend span { display: inline-flex; align-items: center; gap: .4rem; }
 .chart .legend i { display: inline-block; width: 14px; height: 3px; border-radius: 2px; }
 .chart .legend i.rect { width: 10px; height: 10px; border-radius: 2px; }
+.chart .legend i.dash { border-radius: 0; -webkit-mask: repeating-linear-gradient(90deg, #000 0 4px, transparent 4px 7px); mask: repeating-linear-gradient(90deg, #000 0 4px, transparent 4px 7px); }
 .chart .empty, .card .empty { color: var(--ink-3); font-size: .88rem; padding: 2rem 0; text-align: center; border: 1px dashed var(--border); border-radius: var(--r-lg); }
 
 /* tooltip */
@@ -311,3 +337,6 @@ footer .spacer { flex: 1; }
 [data-theme="night"] body { background: linear-gradient(180deg, #15171d 0%, #0e0f13 55%, #0a0b0e 100%); background-attachment: fixed; }
 
 @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } .card::after, .btn { transition: none; } }
+/* key figures: fixed 3 columns so both chains line up tile for tile */
+.stats.compact[data-kfstats] { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+@media (max-width: 760px) { .stats.compact[data-kfstats] { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

@@ -21,6 +21,14 @@ the block range it was computed from.
   metrics in a pass of their own up to that height (`SyncStatus.feeHeight`);
   `ChainOverview` reports `feesThroughHeight` / `feesThroughAt` and leaves the 24 h fee
   figures empty while the fees are more than an hour behind the newest block.
+- **Midnight decoded facts trail the blocks too.** NIGHTGATE's payload decode pass fills DUST
+  consumed, DUST spends and registrations, Zswap inputs/outputs/transients and the circuit
+  name, and settles the transaction type (`lastDecodedHeight`). ASTRA aggregates them in a
+  pass of their own up to that height (`SyncStatus.decodeHeight`): `tx.decoded`, `tx.zswap`,
+  `tx.shielded`, `tx.withProof`, `tx.contractCalls`, `tx.contractDeploys`, `dust.*`,
+  `zswap.*`, and the rankings `TopContracts` / `TopCircuits`. When the source lowers that
+  height to decode a range again (`redecodeFromHeight`), ASTRA drops what it aggregated
+  above it and follows the source up again.
 - **Views are memoised.** A ready-made view (`ChainOverview`, `KeyFigures`, the daily
   entities, the rankings) is computed once per parameter set and kept for
   `ASTRA_VIEW_CACHE_MS` (default 5 s, 0 = off); readers that arrive while it computes
@@ -60,8 +68,11 @@ Reads are public (`@requires: 'any'`); the admin actions `recompute`, `runNow` a
 
 `app/` is a static page (no framework, brand tokens from `@odatano/brand`) that CAP serves
 at `/`: headline numbers of both chains, a blocks-per-minute heartbeat, transactions, fees,
-fee distribution, transaction mix and block fill over a window (24 h, 7 d, 30 d), and the
-rankings. Day and night theme, every chart with a crosshair tooltip.
+fee distribution, transaction mix, block fill and block interval over a window (24 h, 7 d,
+30 d), token mints and burns, the Midnight ledger (DUST, shielded activity, contracts and
+circuits), Cardano stake and governance (epoch figures, certificates, withdrawals, pools and
+DReps), and the rankings. Sections of a chain the instance has no source for are left out.
+Day and night theme, every chart with a crosshair tooltip.
 
 The page lives next to the API pages, one host per network: `astra.preview.odatano.dev`,
 `astra.preprod.odatano.dev`, `astra.odatano.dev` (mainnet), each the reverse proxy in front

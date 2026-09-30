@@ -1,5 +1,5 @@
 using {temporal, } from '@sap/cds/common';
-using {Lovelace, Blake2b224, Blake2b256, HexBytes, Bech32, AssetUnit, AssetSlice, SigningStatus,SubmissionStatus, UTxODataSlice, MetadataLabel, CrawlSyncStatus, ReorgStatus, WalletJobStatus, WalletJobKind, WorkerSignerType} from '../db/types';
+using {Lovelace, Blake2b224, Blake2b256, HexBytes, Bech32, AssetUnit, AssetSlice, AssetSumSlice, SigningStatus,SubmissionStatus, UTxODataSlice, MetadataLabel, CrawlSyncStatus, ReorgStatus, WalletJobStatus, WalletJobKind, WorkerSignerType} from '../db/types';
 
 namespace odatano.cardano;
 
@@ -62,7 +62,7 @@ entity Blocks {
         height      : Integer;
 
         @title      : 'Block SlotLeader'
-        @description: 'Slot leader id as hex string'
+        @description: 'Bech32 id of the pool that produced the block'
         slotLeader  : String;
 
         @title      : 'Block Epoch Number'
@@ -222,6 +222,14 @@ entity PoolEpochSnapshots {
         @description: 'Unix timestamp of the block that triggered the snapshot'
         snapshotTime   : Integer64;
 
+        @title      : 'Snapshot Block Hash'
+        @description: 'Hash of the block the ledger state was read at (Ogmios); null for provider snapshots'
+        snapshotHash   : Blake2b256;
+
+        @title      : 'Source'
+        @description: 'Where the observation came from: ogmios (node ledger state at the snapshot block) or koios (provider, current state)'
+        source         : String(10);
+
         @title      : 'Blocks Minted'
         @description: 'Total number of blocks minted by the pool'
         blocksMinted   : Integer;
@@ -287,6 +295,26 @@ entity DrepEpochSnapshots {
         @description: 'Unix timestamp of the block that triggered the snapshot'
         snapshotTime    : Integer64;
 
+        @title      : 'Snapshot Block Hash'
+        @description: 'Hash of the block the ledger state was read at (Ogmios); null for provider snapshots'
+        snapshotHash    : Blake2b256;
+
+        @title      : 'Source'
+        @description: 'ogmios | koios, as on PoolEpochSnapshots'
+        source          : String(10);
+
+        @title      : 'Deposit'
+        @description: 'DRep registration deposit in lovelace; null when the source does not report it'
+        deposit         : Lovelace;
+
+        @title      : 'Expires Epoch'
+        @description: 'Epoch the DRep mandate runs out (inactivity expiry); null when the source does not report it'
+        expiresEpoch    : Integer;
+
+        @title      : 'Delegator Count'
+        @description: 'Number of stake credentials delegated to the DRep; null when the source does not report it'
+        delegatorCount  : Integer;
+
         @title      : 'Vote Power'
         @description: 'Amount of vote power in lovelace'
         amount          : Lovelace;
@@ -306,6 +334,67 @@ entity DrepEpochSnapshots {
         @title      : 'Expired'
         @description: 'Indicates if drep is expired'
         expired         : Boolean;
+}
+
+@title      : 'Epoch Ledger Snapshot Entity'
+@description: 'Network-wide ledger figures per epoch, written with the pool/DRep snapshot. One row per snapshotted epoch; a missing epoch was not observed. Totals above 2^53 lovelace lose precision on SQLite.'
+entity EpochLedgerSnapshots {
+
+        @title      : 'Epoch (Key)'
+        @description: 'Epoch the observation belongs to'
+    key epoch                 : Integer;
+
+        @title      : 'Snapshot Slot'
+        @description: 'Absolute slot of the block the snapshot was taken at'
+        snapshotSlot          : Integer64;
+
+        @title      : 'Snapshot Time'
+        @description: 'Unix timestamp of the snapshot block'
+        snapshotTime          : Integer64;
+
+        @title      : 'Snapshot Block Hash'
+        @description: 'Hash of the block the ledger state was read at (Ogmios); null for provider snapshots'
+        snapshotHash          : Blake2b256;
+
+        @title      : 'Source'
+        @description: 'ogmios | koios'
+        source                : String(10);
+
+        @title      : 'Treasury'
+        @description: 'Treasury pot in lovelace; null when the source does not report it'
+        treasury              : Lovelace;
+
+        @title      : 'Reserves'
+        @description: 'Reserves pot in lovelace; null when the source does not report it'
+        reserves              : Lovelace;
+
+        @title      : 'Total Supply'
+        @description: 'Maximum supply minus reserves, in lovelace'
+        totalSupply           : Lovelace;
+
+        @title      : 'Live Stake'
+        @description: 'Sum of the live stake of all pools'
+        liveStake             : Lovelace;
+
+        @title      : 'Active Stake'
+        @description: 'Active stake of the epoch (stake snapshot used for leader election and rewards)'
+        activeStake           : Lovelace;
+
+        @title      : 'Pool Count'
+        @description: 'Registered stake pools observed'
+        poolCount             : Integer;
+
+        @title      : 'DRep Count'
+        @description: 'Registered DReps observed'
+        drepCount             : Integer;
+
+        @title      : 'Always-Abstain Stake'
+        @description: 'Stake delegated to the predefined always-abstain DRep; null when not reported'
+        drepAbstainStake      : Lovelace;
+
+        @title      : 'Always-No-Confidence Stake'
+        @description: 'Stake delegated to the predefined always-no-confidence DRep; null when not reported'
+        drepNoConfidenceStake : Lovelace;
 }
 
 @title      : 'Asset Entity'
@@ -512,7 +601,7 @@ entity AddressAssets : temporal {
 
         @title      : 'Asset Details'
         @description: 'Structural slice for asset details'
-        asset   : AssetSlice;
+        asset   : AssetSumSlice;
 }
 
 @title      : 'Address UTxOs'
@@ -636,6 +725,10 @@ entity Transactions {
         @description: 'The unique transaction identifier as hex string'
     key hash        : Blake2b256;
 
+        @title      : 'Transaction Sequence Number'
+        @description: 'Chain position slot * 65536 + txIndex; key of the input and output rows, ascending along the chain'
+        txSeq       : Integer64;
+
         @title      : 'Transaction  Block Hash'
         @description: 'The block hash containing the transaction'
         blockHash   : Blake2b256;
@@ -676,12 +769,12 @@ entity Transactions {
         @title      : 'Transaction Inputs'
         @description: 'The transaction inputs composition'
         inputs      : Composition of many TransactionInputs
-                          on inputs.tx = $self;
+                          on inputs.txSeq = txSeq;
 
         @title      : 'Transaction Outputs'
         @description: 'The transaction outputs composition'
         outputs     : Composition of many TransactionOutputs
-                          on outputs.tx = $self;
+                          on outputs.txSeq = txSeq;
 
         @title      : 'Transaction Certificates'
         @description: 'Certificates carried by the transaction (stake/pool/DRep). Filled by the chain crawler only (crawler.certificates); the lazy path leaves it empty.'
@@ -711,9 +804,13 @@ entity Transactions {
 @readonly
 entity TransactionInputs {
 
-        @title      : 'Transaction (key)'
+        @title      : 'Transaction Sequence Number (key)'
+        @description: 'Transactions.txSeq of the spending transaction'
+    key txSeq        : Integer64;
+
+        @title      : 'Transaction'
         @description: 'The associated transaction'
-    key tx           : Association to Transactions;
+        tx           : Association to one Transactions on tx.txSeq = txSeq;
 
         @title      : 'Input Index (key)'
         @description: 'The input index of the input utxo'
@@ -870,6 +967,10 @@ entity LedgerAddresses {
         @description: 'Reward account of a base address (bech32); null otherwise'
         stakeAddress   : Bech32;
 
+        @title      : 'Payment Credential'
+        @description: 'Payment key or script hash (hex, 28 bytes) of a base, pointer or enterprise address; null for Byron and reward addresses'
+        paymentCredential : String(56);
+
         @title      : 'Address Type'
         @description: 'base | enterprise | pointer | reward | byron | unknown'
         addressType    : String(20);
@@ -920,7 +1021,7 @@ entity LedgerAddressAssets {
 
         @title      : 'Asset'
         @description: 'Quantity and decomposed unit'
-        asset   : AssetSlice;
+        asset   : AssetSumSlice;
 }
 
 @title      : 'Ledger Accounts'
@@ -1010,14 +1111,60 @@ entity TransactionWithdrawals {
         lovelace     : Lovelace;
 }
 
+@title      : 'Transaction Redeemers'
+@description: 'Redeemers of a transaction as the chain crawler saw them (Ogmios chain-sync). A spend redeemer names the redeemed input, a mint redeemer the policy. Not written by the lazy path.'
+@readonly
+entity TransactionRedeemers {
+
+        @title      : 'Transaction (key)'
+        @description: 'The transaction carrying the redeemer'
+    key tx               : Association to Transactions;
+
+        @title      : 'Purpose (key)'
+        @description: 'spend | mint | publish | withdraw | vote | propose'
+    key purpose          : String(10);
+
+        @title      : 'Redeemer Index (key)'
+        @description: 'Index within its purpose (spend: position of the input in the sorted inputs; mint: of the policy in the sorted policies)'
+    key redeemerIndex    : Integer;
+
+        @title      : 'Data'
+        @description: 'Redeemer data as PlutusData CBOR hex'
+        data             : LargeString;
+
+        @title      : 'Memory Units'
+        @description: 'Execution memory units'
+        mem              : Integer64;
+
+        @title      : 'CPU Steps'
+        @description: 'Execution CPU steps'
+        steps            : Integer64;
+
+        @title      : 'Redeemed Input Transaction'
+        @description: 'spend: transaction that created the redeemed input'
+        spentTxHash      : Blake2b256;
+
+        @title      : 'Redeemed Input Index'
+        @description: 'spend: output index of the redeemed input'
+        spentOutputIndex : Integer;
+
+        @title      : 'Policy ID'
+        @description: 'mint: the policy the redeemer runs'
+        policyId         : Blake2b224;
+}
+
 @title      : 'Transaction Outputs'
 @description: 'Projection for Transaction Outputs'
 @readonly
 entity TransactionOutputs {
 
-        @title      : 'Transaction (key)'
+        @title      : 'Transaction Sequence Number (key)'
+        @description: 'Transactions.txSeq of the creating transaction'
+    key txSeq        : Integer64;
+
+        @title      : 'Transaction'
         @description: 'The associated transaction'
-    key tx           : Association to Transactions;
+        tx           : Association to one Transactions on tx.txSeq = txSeq;
 
         @title      : 'Output Index (key)'
         @description: 'The output index of the output utxo'
@@ -1286,6 +1433,10 @@ entity TransactionBuilds : temporal {
         @description: 'The outputs created in the transaction build'
         outputs        : Composition of many TransactionBuildOutputs
                              on outputs.build = $self;
+        @title      : 'Redeemers'
+        @description: 'Redeemers of a script build with the execution units stamped on them'
+        redeemers      : Composition of many TransactionBuildRedeemers
+                             on redeemers.build = $self;
 
         @title      : 'Associated Submission'
         @description: 'Association to the transaction submission if submitted'
@@ -1420,6 +1571,31 @@ entity TransactionBuildOutputs {
         @title      : 'Has Assets'
         @description: 'Indicates if output has native assets'
         hasAssets   : Boolean;
+}
+
+@title      : 'Transaction Build Redeemers'
+@description: 'Redeemers of a script build (spend, mint, …) with the execution units stamped on them; compare with maxTxExecutionUnits of the protocol parameters'
+entity TransactionBuildRedeemers {
+
+        @title      : 'Build (key)'
+        @description: 'Association to parent transaction build'
+    key build : Association to TransactionBuilds;
+
+        @title      : 'Tag (key)'
+        @description: 'Redeemer purpose: Spend, Mint, Cert, Withdraw, Vote or Propose'
+    key tag   : String(10);
+
+        @title      : 'Redeemer Index (key)'
+        @description: 'Index within its purpose (spend: position of the input in the sorted inputs)'
+    key redeemerIndex : Integer;
+
+        @title      : 'Memory Units'
+        @description: 'Execution memory units stamped on the redeemer'
+        mem   : Integer64;
+
+        @title      : 'CPU Steps'
+        @description: 'Execution CPU steps stamped on the redeemer'
+        steps : Integer64;
 }
 
 @title      : 'Transaction Build Output Assets'

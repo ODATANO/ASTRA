@@ -93,6 +93,7 @@ export const DAILY_VIEWS: Record<string, DailyView> = {
       { name: 'drepRetirements', metric: 'certs.drepRetirements', stat: 'sum' },
       { name: 'otherCertificates', metric: 'certs.other', stat: 'sum' },
       { name: 'withdrawals', metric: 'withdrawals.count', stat: 'sum' },
+      { name: 'zeroWithdrawals', metric: 'withdrawals.zero', stat: 'sum' },
       { name: 'withdrawnAda', metric: 'withdrawals.value', stat: 'sum' },
     ],
   },

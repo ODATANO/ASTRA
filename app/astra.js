@@ -14,12 +14,18 @@
   const NS = 'http://www.w3.org/2000/svg';
 
   // ── state ─────────────────────────────────────────────────
-  const state = { window: '7d', network: null, overview: {}, cache: new Map(), timer: null, loading: false };
+  // `gen` counts window changes; an answer requested under an older one is dropped, never drawn.
+  const state = { window: '7d', network: null, overview: {}, cache: new Map(), timer: null, loading: false, gen: 0 };
   try { const w = localStorage.getItem('astra.window'); if (['24h', '7d', '30d'].includes(w)) state.window = w; } catch { /* private mode */ }
 
   // ── fetch ─────────────────────────────────────────────────
   const url = (path) => API + path;
-  async function api(path) {
+  function api(path) {
+    const gen = state.gen;
+    const never = new Promise(() => {});
+    return cached(path).then((v) => (gen === state.gen ? v : never), (e) => (gen === state.gen ? Promise.reject(e) : never));
+  }
+  async function cached(path) {
     const key = path;
     if (state.cache.has(key)) return state.cache.get(key);
     const p = fetch(url(path), { headers: { accept: 'application/json' }, credentials: 'same-origin' }).then(async (res) => {
@@ -138,7 +144,7 @@
     if (!plot) { plot = el('div', 'plot'); card.appendChild(plot); }
     return plot;
   }
-  /** spec: { kind: 'line'|'bar'|'hist', x: [iso|label], gran, series: [{ name, color, values: [] }], fmt(v), unit } */
+  /** spec: { kind: 'line'|'bar'|'hist', x: [iso|label], gran, series: [{ name, color, values: [], dash? }], fmt(v), unit } */
   function draw(card, spec) {
     specs.set(card, spec);
     const plot = chartCard(card);
@@ -150,11 +156,17 @@
     const M = { t: 12, r: spec.kind === 'line' ? 56 : 12, b: 26, l: 44 };
     const iw = W - M.l - M.r, ih = H - M.t - M.b;
     const root = svg('svg', { viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: 'img' });
-    root.setAttribute('aria-label', card.querySelector('h3')?.textContent || 'chart');
-    const maxV = Math.max(0, ...spec.series.flatMap((s) => s.values.filter((v) => v != null)));
-    const ticks = niceTicks(spec.yMax || maxV, 4);
-    const yMax = ticks[ticks.length - 1];
-    const y = (v) => M.t + ih - (v / yMax) * ih;
+    root.setAttribute('aria-label', [card.dataset.mark && CHAIN_NAME[card.dataset.mark], card.querySelector('h3')?.textContent || 'chart'].filter(Boolean).join(': '));
+    const all = spec.series.flatMap((s) => s.values.filter((v) => v != null));
+    const maxV = Math.max(0, ...all), minV = Math.min(0, ...all);
+    // the axis reaches below 0 only for values that do (a difference, not a count)
+    const hi = spec.yMax || maxV;
+    const base = niceTicks(hi - minV, 4), step = base[1] - base[0];
+    const ticks = [];
+    for (let v = Math.floor(minV / step) * step; ; v += step) { ticks.push(+v.toFixed(10)); if (v >= hi - step * 1e-9) break; }
+    if (ticks.length < 2) ticks.push(+(ticks[0] + step).toFixed(10));
+    const yMin = ticks[0], yMax = ticks[ticks.length - 1];
+    const y = (v) => M.t + ih - ((v - yMin) / (yMax - yMin)) * ih;
     const n = spec.x.length;
     const slot = iw / Math.max(1, spec.kind === 'line' ? n - 1 : n);
     const xc = (i) => (spec.kind === 'line' ? (n === 1 ? M.l + iw / 2 : M.l + i * slot) : M.l + i * slot + slot / 2);
@@ -180,7 +192,7 @@
         }
         let d = '', open = false;
         s.values.forEach((v, i) => { if (v == null) { open = false; return; } d += (open ? ' L' : ' M') + `${xc(i)} ${y(v)}`; open = true; });
-        root.appendChild(svg('path', { d: d.trim(), class: 'line' }, { stroke: s.color }));
+        root.appendChild(svg('path', { d: d.trim(), class: 'line', ...(s.dash ? { 'stroke-dasharray': '5 4' } : {}) }, { stroke: s.color }));
         let last = -1; for (let i = n - 1; i >= 0; i--) if (s.values[i] != null) { last = i; break; }
         if (last >= 0) {
           root.appendChild(svg('circle', { cx: xc(last), cy: y(s.values[last]), r: 4, class: 'dot' }, { fill: s.color }));
@@ -210,7 +222,7 @@
       }
     }
     // crosshair + tooltip: the nearest x wins, every series reads out
-    const cross = svg('line', { x1: 0, x2: 0, y1: M.t, y2: y(0), class: 'cross' }, { display: 'none' });
+    const cross = svg('line', { x1: 0, x2: 0, y1: M.t, y2: M.t + ih, class: 'cross' }, { display: 'none' });
     root.appendChild(cross);
     const hit = svg('rect', { x: M.l - slot / 2, y: 0, width: iw + slot, height: H, class: 'hit-cross' });
     root.appendChild(hit);
@@ -238,7 +250,7 @@
     card.querySelector('.legend')?.remove();
     if (spec.series.length > 1) {
       const lg = el('div', 'legend');
-      for (const s of spec.series) { const it = el('span'); const key = el('i', spec.kind === 'bar' ? 'rect' : ''); key.style.background = s.color; it.appendChild(key); it.appendChild(document.createTextNode(s.name)); lg.appendChild(it); }
+      for (const s of spec.series) { const it = el('span'); const key = el('i', spec.kind === 'bar' ? 'rect' : s.dash ? 'dash' : ''); key.style.background = s.color; it.appendChild(key); it.appendChild(document.createTextNode(s.name)); lg.appendChild(it); }
       plot.after(lg);
     }
   }
@@ -333,11 +345,20 @@
         $('fact' + CHAIN_NAME[chain]).textContent = `${CHAIN_NAME[chain]} at ${fmtInt(o.sourceTipHeight)}`;
         $('fact' + CHAIN_NAME[chain]).className = chain;
       }
+      applyChains();
     } catch (err) {
       Object.values(cards).forEach((c) => errorState(c.querySelector('[data-stats]'), err));
       $('netBadge').textContent = 'offline'; $('netBadge').classList.add('off');
     } finally { Object.values(cards).forEach((c) => c.classList.remove('loading')); }
   }
+
+  // Sections and cards of one chain (data-chain) disappear when the instance has no source for it.
+  const has = (chain) => !!state.overview[chain];
+  function applyChains() {
+    document.querySelectorAll('[data-chain]').forEach((e) => { e.hidden = !has(e.dataset.chain); });
+    document.querySelectorAll('[data-nav]').forEach((a) => { a.hidden = !!$(a.dataset.nav)?.hidden; });
+  }
+  const setSubs = (root, W) => root.querySelectorAll('[data-sub]').forEach((e) => { e.textContent = perOf(W); });
 
   // ── Heartbeat ─────────────────────────────────────────────
   async function loadHeartbeat() {
@@ -367,10 +388,39 @@
     return x.map((k) => (m.has(k) ? pick(m.get(k)) : null));
   }
   const unionX = (...lists) => [...new Set(lists.flat().map((p) => p.bucketStart))].sort();
+  /**
+   * Sums of event metrics on the axis of a dense base series (blocks.count, tx.decoded): a
+   * bucket the base covers but a metric lacks is a real 0, one the base lacks stays out.
+   * parts: [[metric, name, color?]]; opts: { kind, unit, fmt, fmtAxis, empty }
+   */
+  async function sumChart(card, chain, base, parts, opts) {
+    const W = state.window;
+    const [b, ...s] = await Promise.all([series(chain, base, W).catch(() => null), ...parts.map(([m]) => series(chain, m, W).catch(() => null))]);
+    const x = unionX(pts(b), ...s.map(pts));
+    draw(card, {
+      kind: opts.kind || 'line', gran: granOf(W), x, unit: opts.unit, fmt: opts.fmt || fmtInt, fmtAxis: opts.fmtAxis, area: parts.length === 1 ? undefined : false, empty: opts.empty,
+      series: parts.map(([, name, color], i) => ({
+        name, color: color || (parts.length === 1 ? COLOR[chain] : SLOT[i]),
+        values: s[i] ? alignOn(x, pts(s[i]), (p) => Number(p.sum)).map((v) => (v == null ? 0 : v)) : x.map(() => null),
+      })),
+    });
+  }
+  const ACTIVITY = ['tx', 'feesCardano', 'feesMidnight', 'distCardano', 'distMidnight', 'mixCardano', 'mixMidnight', 'empty', 'txPerBlock', 'interval',
+    'feeErrMidnight', 'supply', 'volume', 'tokenTransfers', 'utxoFlow', 'blockSize', 'contractTx', 'txSize'];
+  /** median and p95 of a size distribution, bytes */
+  async function sizeChart(card, chain, metric) {
+    const W = state.window;
+    const s = await series(chain, metric, W);
+    const x = pts(s).map((p) => p.bucketStart);
+    draw(card, { kind: 'line', gran: granOf(W), x, unit: 'bytes', fmt: (v) => `${fmtInt(Math.round(v))} B`, area: false, series: [
+      { name: 'median', color: COLOR[chain], values: pts(s).map((p) => (p.p50 == null ? null : Number(p.p50))) },
+      { name: 'p95', color: COLOR.mute, values: pts(s).map((p) => (p.p95 == null ? null : Number(p.p95))) },
+    ], empty: 'No data in this window yet.' });
+  }
   async function loadActivity() {
     const W = state.window, gran = granOf(W);
-    document.querySelector('[data-chart="tx"] [data-sub]').textContent = perOf(W);
-    const cards = [...document.querySelectorAll('#activity .card.chart')];
+    setSubs(document.querySelector('main'), W);
+    const cards = ACTIVITY.map((n) => document.querySelector(`[data-chart="${n}"]`)).filter(Boolean);
     cards.forEach((c) => c.classList.add('loading'));
     const jobs = [];
     // transactions, both chains on one axis
@@ -414,13 +464,14 @@
         const card = document.querySelector(`[data-chart="mix${N}"]`);
         const parts = chain === 'cardano'
           ? [['tx.withAssets', 'with native assets'], ['tx.withMetadata', 'with metadata']]
-          : [['tx.shielded', 'shielded'], ['tx.withProof', 'with ZK proof'], ['tx.contractCalls', 'contract calls'], ['tx.failed', 'failed']];
+          : [['tx.contractCalls', 'contract calls'], ['tx.contractDeploys', 'contract deploys'], ['tx.zswap', 'shielded (decoded)'], ['tx.failed', 'failed']];
         try {
           const all = await series(chain, 'tx.count', W);
           const subs = await Promise.all(parts.map(([m]) => series(chain, m, W).catch(() => null)));
           const x = pts(all).map((p) => p.bucketStart);
           const total = new Map(pts(all).map((p) => [p.bucketStart, Number(p.sum)]));
-          const share = (s) => alignOn(x, pts(s), (p) => (total.get(p.bucketStart) ? (Number(p.sum) / total.get(p.bucketStart)) * 100 : null));
+          // an hour with transactions but none of a kind is a real 0 %, not a gap
+          const share = (s) => (s ? alignOn(x, pts(s), (p) => Number(p.sum)).map((v, i) => (total.get(x[i]) ? ((v ?? 0) / total.get(x[i])) * 100 : null)) : x.map(() => null));
           draw(card, { kind: 'line', gran, x, unit: '%', fmt: (v) => fmtPct(v), fmtAxis: (v) => `${fmtNum(v)}%`, series: parts.map(([, name], i) => ({ name, color: SLOT[i], values: share(subs[i]) })), area: false });
         } catch (err) { errorState(chartCard(card), err); }
       })());
@@ -431,7 +482,7 @@
       try {
         const r = await Promise.all(CHAINS.map((ch) => Promise.all([series(ch, 'blocks.count', W), series(ch, 'blocks.empty', W)]).catch(() => null)));
         const x = unionX(...r.map((p) => (p ? pts(p[0]) : [])));
-        const shares = r.map((p) => { if (!p) return x.map(() => null); const tot = new Map(pts(p[0]).map((q) => [q.bucketStart, Number(q.sum)])); return alignOn(x, pts(p[1]), (q) => (tot.get(q.bucketStart) ? (Number(q.sum) / tot.get(q.bucketStart)) * 100 : null)); });
+        const shares = r.map((p) => { if (!p) return x.map(() => null); const tot = new Map(pts(p[0]).map((q) => [q.bucketStart, Number(q.sum)])); return alignOn(x, pts(p[1]), (q) => Number(q.sum)).map((v, i) => (tot.get(x[i]) ? ((v ?? 0) / tot.get(x[i])) * 100 : null)); });
         draw(card, { kind: 'line', gran, x, unit: '%', fmt: (v) => fmtPct(v), fmtAxis: (v) => `${fmtNum(v)}%`, area: false, series: CHAINS.map((ch, i) => ({ name: CHAIN_NAME[ch], color: COLOR[ch], values: shares[i] })) });
       } catch (err) { errorState(chartCard(card), err); }
     })());
@@ -443,11 +494,225 @@
         draw(card, { kind: 'line', gran, x, unit: 'tx', fmt: (v) => fmtNum(v, 2), area: false, series: CHAINS.map((ch, i) => ({ name: CHAIN_NAME[ch], color: COLOR[ch], values: alignOn(x, pts(r[i]), (p) => (p.avg == null ? null : Number(p.avg))) })) });
       } catch (err) { errorState(chartCard(card), err); }
     })());
+    // block interval: median solid, p95 dashed, per chain
+    jobs.push((async () => {
+      const card = document.querySelector('[data-chart="interval"]');
+      try {
+        const r = await Promise.all(CHAINS.map((ch) => (has(ch) ? series(ch, 'blocks.interval', W).catch(() => null) : null)));
+        const x = unionX(...r.map((s) => pts(s)));
+        const pick = (i, k) => alignOn(x, pts(r[i]), (p) => (p[k] == null ? null : Number(p[k])));
+        draw(card, { kind: 'line', gran, x, unit: 's', fmt: (v) => `${fmtNum(v, 1)} s`, area: false, series: CHAINS.flatMap((ch, i) => (r[i] ? [
+          { name: `${CHAIN_NAME[ch]} median`, color: COLOR[ch], values: pick(i, 'p50') },
+          { name: `${CHAIN_NAME[ch]} p95`, color: COLOR[ch], dash: true, values: pick(i, 'p95') },
+        ] : [])) });
+      } catch (err) { errorState(chartCard(card), err); }
+    })());
+    if (has('midnight')) jobs.push((async () => {
+      const card = document.querySelector('[data-chart="feeErrMidnight"]');
+      try {
+        const s = await series('midnight', 'fees.estimateError', W);
+        const unit = s.unit, x = pts(s).map((p) => p.bucketStart);
+        const scale = moneyScale(unit, Math.max(0, ...pts(s).map((p) => Math.abs(Number(p.p95) || 0))));
+        draw(card, { kind: 'line', gran, x, unit: scale.label, fmt: (v) => fmtFee(v, unit, scale), fmtAxis: (v) => fmtNum(feeValue(v, unit, scale), 2), series: [
+          { name: 'median', color: COLOR.midnight, values: pts(s).map((p) => (p.p50 == null ? null : Number(p.p50))) },
+          { name: 'p95', color: COLOR.mute, values: pts(s).map((p) => (p.p95 == null ? null : Number(p.p95))) },
+        ], empty: 'No fees in this window yet.' });
+      } catch (err) { errorState(chartCard(card), err); }
+    })());
+    const job = (name, fn) => jobs.push((async () => { const card = document.querySelector(`[data-chart="${name}"]`); if (!card) return; try { await fn(card); } catch (err) { errorState(chartCard(card), err); } })());
+    if (has('cardano')) {
+      job('tokenTransfers', (card) => sumChart(card, 'cardano', 'blocks.count', [['tokens.transfers', 'transfers']], { kind: 'bar', unit: 'moves', empty: 'No token transfers in this window yet.' }));
+      job('utxoFlow', (card) => sumChart(card, 'cardano', 'blocks.count', [['utxo.created', 'created'], ['utxo.spent', 'spent']], { unit: 'utxo' }));
+      job('blockSize', (card) => sizeChart(card, 'cardano', 'blocks.size'));
+    }
+    if (has('midnight')) {
+      job('contractTx', (card) => sumChart(card, 'midnight', 'blocks.count', [['tx.contractCalls', 'calls'], ['tx.contractDeploys', 'deploys']], { unit: 'tx', empty: 'No contract transactions in this window yet.' }));
+      job('txSize', (card) => sizeChart(card, 'midnight', 'tx.size'));
+    }
+    if (has('cardano')) {
+      jobs.push((async () => {
+        const card = document.querySelector('[data-chart="supply"]');
+        try { await sumChart(card, 'cardano', 'blocks.count', [['tokens.mints', 'mints'], ['tokens.burns', 'burns']], { unit: 'tx', empty: 'No mints or burns in this window yet.' }); }
+        catch (err) { errorState(chartCard(card), err); }
+      })());
+      jobs.push((async () => {
+        const card = document.querySelector('[data-chart="volume"]');
+        const ada = moneyScale('ADA', 0);
+        try { await sumChart(card, 'cardano', 'blocks.count', [['value.transferred', 'transferred']], { kind: 'bar', unit: ada.label, fmt: (v) => `${fmtNum(v, 0)} ${ada.label}` }); }
+        catch (err) { errorState(chartCard(card), err); }
+      })());
+    }
+    await Promise.allSettled(jobs);
+    cards.forEach((c) => c.classList.remove('loading'));
+  }
+
+  // ── Key figures (window vs. previous window) ──────────
+  const KEY_FIGURES = {
+    cardano: [['tx.count', 'Transactions'], ['blocks.count', 'Blocks'], ['fees.paid', 'Avg fee'], ['tokens.transfers', 'Token transfers'], ['utxo.created', 'UTxOs created'], ['withdrawals.count', 'Withdrawals']],
+    midnight: [['tx.count', 'Transactions'], ['blocks.count', 'Blocks'], ['fees.paid', 'Avg fee'], ['tx.contractCalls', 'Contract calls'], ['tx.contractDeploys', 'Contract deploys'], ['tx.zswap', 'Shielded (decoded)']],
+  };
+  async function loadKeyFigures() {
+    const W = state.window;
+    const cards = [...document.querySelectorAll('[data-kf]')];
+    cards.forEach((c) => c.classList.add('loading'));
+    const metrics = [...new Set(Object.values(KEY_FIGURES).flat().map(([m]) => m))];
+    try {
+      const { value } = await api(filter('KeyFigures', `window eq '${W}' and (${metrics.map((m) => `metric eq '${m}'`).join(' or ')})`));
+      for (const card of cards) {
+        const chain = card.dataset.kf, box = card.querySelector('[data-kfstats]');
+        clear(box);
+        for (const [metric, label] of KEY_FIGURES[chain] || []) {
+          const r = value.find((v) => v.chain === chain && v.metric === metric);
+          if (!r) continue;
+          const money = r.kind === 'distribution' && r.value != null;
+          const shown = r.value == null ? '–' : money ? fmtFee(r.value, r.unit) : fmtInt(r.value);
+          box.appendChild(stat(label, shown, null, null, r.previous != null && Number(r.previous) > 0 && r.changePct != null ? Number(r.changePct) : null));
+        }
+        if (!box.childNodes.length) emptyState(box, 'No figures for this window yet.');
+      }
+    } catch (err) { cards.forEach((c) => errorState(c.querySelector('[data-kfstats]'), err)); }
+    finally { cards.forEach((c) => c.classList.remove('loading')); }
+  }
+
+  // ── Ledger (Midnight, decoded from the ledger payload) ───
+  async function loadLedger() {
+    if (!has('midnight')) return;
+    const W = state.window, root = $('ledger');
+    setSubs(root, W);
+    const cards = [...root.querySelectorAll('.card')];
+    cards.forEach((c) => c.classList.add('loading'));
+    const chart = (name, fn) => (async () => { const card = root.querySelector(`[data-chart="${name}"]`); try { await fn(card); } catch (err) { errorState(chartCard(card), err); } })();
+    const decoded = 'tx.decoded';
+    const jobs = [
+      (async () => {
+        // how far the decoding reaches, shown only while it trails the blocks
+        const box = $('decodeStatus');
+        try {
+          const { value } = await api(filter('SyncStatus', `chain eq 'midnight'`));
+          const c = value[0] || {};
+          const lag = c.lastHeight == null ? 0 : Number(c.lastHeight) - Number(c.decodeHeight ?? 0);
+          clear(box);
+          box.hidden = !(c.decodeHeight == null || lag > 100);
+          if (!box.hidden) {
+            const at = c.decodeBlockTime ? new Date(Number(c.decodeBlockTime) * 1000).toISOString() : null;
+            box.appendChild(stat('Decoded through', c.decodeHeight == null ? '–' : fmtInt(c.decodeHeight), null, at ? fmtWhen(at) : null));
+            box.appendChild(stat('Blocks behind', fmtInt(lag)));
+          }
+        } catch { box.hidden = true; }
+      })(),
+      // stored in DUST, not specks (specks squared overflow the sumSq column)
+      chart('dust', (card) => sumChart(card, 'midnight', decoded, [['dust.consumed', 'consumed']], { kind: 'bar', unit: 'DUST', fmt: (v) => `${fmtNum(v, 2)} DUST`, empty: 'No decoded DUST spends in this window yet.' })),
+      chart('dustEvents', (card) => sumChart(card, 'midnight', decoded, [['dust.spends', 'spends'], ['dust.registrations', 'registrations']], { unit: 'events', empty: 'No decoded DUST events in this window yet.' })),
+      chart('zswap', (card) => sumChart(card, 'midnight', decoded, [['zswap.inputs', 'inputs'], ['zswap.outputs', 'outputs'], ['zswap.transients', 'transients']], { unit: 'coins', empty: 'No decoded shielded activity in this window yet.' })),
+      chart('zswapShare', async (card) => {
+        const [all, z] = await Promise.all([series('midnight', decoded, W), series('midnight', 'tx.zswap', W).catch(() => null)]);
+        const x = pts(all).map((p) => p.bucketStart);
+        const zs = new Map(pts(z).map((p) => [p.bucketStart, Number(p.sum)]));
+        draw(card, { kind: 'line', gran: granOf(W), x, unit: '%', fmt: (v) => fmtPct(v), fmtAxis: (v) => `${fmtNum(v)}%`, series: [
+          { name: 'shielded', color: COLOR.midnight, values: pts(all).map((p) => (Number(p.sum) ? ((zs.get(p.bucketStart) || 0) / Number(p.sum)) * 100 : null)) },
+        ], empty: 'No decoded transactions in this window yet.' });
+      }),
+    ];
+    const boards = [
+      ['contracts', 'TopContracts', [{ head: 'Contract', key: 'entityId', id: true, fmt: (v) => short(v, 14, 10) }, { head: 'Calls', key: 'count', num: true, fmt: fmtInt, bar: true }], 'No decoded contract calls in this window yet.'],
+      ['circuits', 'TopCircuits', [{ head: 'Circuit', key: 'entityId', id: true, fmt: (v) => short(v, 24, 8) }, { head: 'Calls', key: 'count', num: true, fmt: fmtInt, bar: true }], 'No decoded contract calls in this window yet.'],
+    ];
+    for (const [name, entity, cols, empty] of boards) {
+      jobs.push((async () => {
+        const tbl = root.querySelector(`[data-board="${name}"] [data-table]`);
+        try { const { value } = await api(filter(entity, `chain eq 'midnight' and window eq '${W}' and rank le 10`)); if (!boardTable(tbl, value, cols)) emptyState(tbl, empty); }
+        catch (err) { errorState(tbl, err); }
+      })());
+    }
+    await Promise.allSettled(jobs);
+    cards.forEach((c) => c.classList.remove('loading'));
+  }
+
+  // ── Stake & Governance (Cardano) ─────────────────────────
+  async function loadStake() {
+    if (!has('cardano')) return;
+    const W = state.window, root = $('stake');
+    setSubs(root, W);
+    const cards = [...root.querySelectorAll('.card')];
+    cards.forEach((c) => c.classList.add('loading'));
+    const ada = moneyScale('ADA', 0);
+    const fmtAda = (v) => `${fmtNum(Number(v), 0)} ${ada.label}`;
+    const chart = (name, fn) => (async () => { const card = root.querySelector(`[data-chart="${name}"]`); try { await fn(card); } catch (err) { errorState(chartCard(card), err); } })();
+    const epochs = api(`/StakeEpochs?$filter=${enc("chain eq 'cardano'")}&$orderby=${enc('epoch desc')}&$top=2`).then((r) => r.value || []);
+    const jobs = [
+      (async () => {
+        const box = $('stakeStats');
+        try {
+          const [cur, prev] = await epochs;
+          clear(box);
+          if (!cur) { emptyState(box, 'No epoch snapshot yet.'); return; }
+          const ch = (k) => (prev && Number(prev[k]) > 0 ? ((Number(cur[k]) - Number(prev[k])) / Number(prev[k])) * 100 : null);
+          box.appendChild(stat('Epoch', fmtInt(cur.epoch), null, fmtWhen(cur.takenAt)));
+          box.appendChild(stat('Pools', fmtInt(cur.pools), null, null, ch('pools')));
+          box.appendChild(stat('Live stake', fmtNum(Number(cur.totalLiveStakeAda)), ada.label, null, ch('totalLiveStakeAda')));
+          box.appendChild(stat('Active DReps', fmtInt(cur.activeDreps), null, null, ch('activeDreps')));
+          box.appendChild(stat('Voting power', fmtNum(Number(cur.totalVotingPowerAda)), ada.label, null, ch('totalVotingPowerAda')));
+          root.querySelectorAll('[data-epoch]').forEach((e) => { e.textContent = `epoch ${fmtInt(cur.epoch)}`; });
+        } catch (err) { errorState(box, err); }
+      })(),
+      chart('delegations', (card) => sumChart(card, 'cardano', 'blocks.count', [
+        ['certs.poolDelegations', 'pool delegations'], ['certs.voteDelegations', 'vote delegations'],
+        ['certs.stakeRegistrations', 'stake registrations'], ['certs.stakeDeregistrations', 'stake deregistrations'],
+      ], { unit: 'certs', empty: 'No certificates in this window yet.' })),
+      chart('lifecycle', (card) => sumChart(card, 'cardano', 'blocks.count', [
+        ['certs.poolRegistrations', 'pool registrations'], ['certs.poolRetirements', 'pool retirements'],
+        ['certs.drepRegistrations', 'DRep registrations'], ['certs.drepRetirements', 'DRep retirements'],
+      ], { unit: 'certs', empty: 'No certificates in this window yet.' })),
+      chart('withdrawn', (card) => sumChart(card, 'cardano', 'blocks.count', [['withdrawals.value', 'withdrawn']], { kind: 'bar', unit: ada.label, fmt: fmtAda, empty: 'No withdrawals in this window yet.' })),
+      chart('withdrawals', (card) => sumChart(card, 'cardano', 'blocks.count', [['withdrawals.count', 'withdrawals'], ['withdrawals.zero', 'zero ADA']], { unit: 'withdrawals', empty: 'No withdrawals in this window yet.' })),
+    ];
+    // holdings of the newest epoch; the window switch does not apply
+    const holdings = [
+      ['pools', 'TopPools', 'pool', 'stake.live', 'Pool', 'Live stake', 'Pools', 'pools for 51 %'],
+      ['dreps', 'TopDReps', 'drep', 'governance.votingPower', 'DRep', 'Voting power', 'DReps', 'DReps for 51 %'],
+    ];
+    for (const [name, entity, dim, metric, head, amount, countLabel, nakHint] of holdings) {
+      jobs.push((async () => {
+        const card = root.querySelector(`[data-board="${name}"]`);
+        const tbl = card.querySelector('[data-table]'), conc = card.querySelector('[data-conc]');
+        const concPath = `/getConcentration(chain='cardano',dimension='${dim}',metric='${metric}',window='epoch',by='sum',subject='')`;
+        try {
+          const [list, c] = await Promise.all([api(filter(entity, `chain eq 'cardano' and rank le 10`)), api(concPath).catch(() => null)]);
+          clear(conc);
+          if (c && Number(c.entities) > 0) {
+            conc.appendChild(stat(countLabel, fmtInt(c.entities)));
+            conc.appendChild(stat('Top 10 share', fmtPct(Number(c.top10Share) * 100)));
+            conc.appendChild(stat('Nakamoto', fmtInt(c.nakamoto), null, nakHint));
+            conc.appendChild(stat('Gini', fmtNum(Number(c.gini), 2), null, '0 = even'));
+          }
+          const total = c ? Number(c.total) : 0;
+          if (!boardTable(tbl, list.value, [
+            { head, key: 'entityId', id: true, fmt: (v) => short(v, 16, 8) },
+            { head: amount, key: 'sum', num: true, fmt: fmtAda, bar: true },
+            { head: 'Share', key: 'sum', num: true, fmt: (v) => (total ? fmtPct((Number(v) / total) * 100) : '–') },
+          ])) emptyState(tbl, 'No ranking for the latest epoch yet.');
+        } catch (err) { errorState(tbl, err); }
+      })());
+    }
+    const flows = [
+      ['delegatedPools', 'TopDelegatedPools', 'Pool'],
+      ['votedDReps', 'TopVotedDReps', 'DRep'],
+    ];
+    for (const [name, entity, head] of flows) {
+      jobs.push((async () => {
+        const tbl = root.querySelector(`[data-board="${name}"] [data-table]`);
+        try {
+          const { value } = await api(filter(entity, `chain eq 'cardano' and window eq '${W}' and rank le 10`));
+          if (!boardTable(tbl, value, [{ head, key: 'entityId', id: true, fmt: (v) => short(v, 16, 8) }, { head: 'Delegations', key: 'count', num: true, fmt: fmtInt, bar: true }])) emptyState(tbl, 'No delegations in this window yet.');
+        } catch (err) { errorState(tbl, err); }
+      })());
+    }
     await Promise.allSettled(jobs);
     cards.forEach((c) => c.classList.remove('loading'));
   }
 
   // ── Rankings ──────────────────────────────────────────────
+
   function boardTable(container, rows, cols) {
     if (!rows.length) return false;
     const table = el('table', 'compact');
@@ -520,32 +785,38 @@
   }
 
   // ── orchestration ─────────────────────────────────────────
-  async function loadAll() {
+  /** quiet: the background refresh swaps the values in without dimming the cards. */
+  async function loadAll(quiet = false) {
     if (state.loading) return;
     state.loading = true;
     state.cache.clear();
     $('refresh').disabled = true;
+    document.body.classList.toggle('quiet', quiet);
     try {
       await loadOverview();
-      await Promise.allSettled([loadHeartbeat(), loadActivity(), loadRankings()]);
+      await Promise.allSettled([loadHeartbeat(), loadKeyFigures(), loadActivity(), loadLedger(), loadStake(), loadRankings()]);
       $('updated').textContent = `updated ${new Date().toISOString().slice(11, 19)} UTC`;
-    } finally { state.loading = false; $('refresh').disabled = false; }
+    } finally { state.loading = false; $('refresh').disabled = false; document.body.classList.remove('quiet'); }
   }
   function setWindow(w) {
+    if (w === state.window) return;
     state.window = w;
+    state.gen++;
+    // a refresh still waiting on the old window's answers will never finish; let the next one run
+    state.loading = false; $('refresh').disabled = false; document.body.classList.remove('quiet');
     try { localStorage.setItem('astra.window', w); } catch { /* private mode */ }
     document.querySelectorAll('#windowSeg button').forEach((b) => b.classList.toggle('on', b.dataset.window === w));
     state.cache.clear();
-    Promise.allSettled([loadActivity(), loadRankings()]);
+    Promise.allSettled([loadKeyFigures(), loadActivity(), loadLedger(), loadStake(), loadRankings()]);
   }
   document.querySelectorAll('#windowSeg button').forEach((b) => { b.classList.toggle('on', b.dataset.window === state.window); b.addEventListener('click', () => setWindow(b.dataset.window)); });
-  $('refresh').addEventListener('click', loadAll);
+  $('refresh').addEventListener('click', () => loadAll());
   $('heroBase').textContent = new URL(API, location.href).href;
   // "API" leads to the readable reference on the network's API pages (astra.<net> -> api.<net>,
   // the ASTRA section); $metadata is the fallback for a host without that twin (local work).
   $('apiLink').href = /^astra\./.test(location.hostname) ? `https://api.${location.hostname.slice(6)}/reference#AstraService` : url('/$metadata');
-  const schedule = () => { clearInterval(state.timer); state.timer = setInterval(() => { if (!document.hidden) loadAll(); }, CFG.refreshMs || 60000); };
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) loadAll(); });
+  const schedule = () => { clearInterval(state.timer); state.timer = setInterval(() => { if (!document.hidden) loadAll(true); }, CFG.refreshMs || 60000); };
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) loadAll(true); });
 
   // ── chrome: theme, burger, pointer glow (same as the API pages) ─
   const themeBtn = $('theme');
@@ -562,6 +833,45 @@
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { setOpen(false); hideTip(); } });
   window.addEventListener('resize', () => { if (window.innerWidth > 1100) setOpen(false); });
   document.querySelectorAll('.card').forEach((c) => c.addEventListener('pointermove', (ev) => { const r = c.getBoundingClientRect(); c.style.setProperty('--mx', ev.clientX - r.left + 'px'); c.style.setProperty('--my', ev.clientY - r.top + 'px'); }));
+
+  // ── chain logos on cards and section heads (data-mark), day and night variant ─
+  const LOGO = { cardano: ['cardano-horizontal-blue', 'cardano-horizontal-white'], midnight: ['midnight-logo-horizontal-dark', 'midnight-logo-horizontal-white'] };
+  document.querySelectorAll('[data-mark]').forEach((host) => {
+    const chain = host.dataset.mark;
+    const head = host.classList.contains('section-head') ? host : host.querySelector('.chart-head');
+    if (!LOGO[chain] || !head) return;
+    const mark = el('span', 'chain-mark');
+    LOGO[chain].forEach((file, i) => { const img = el('img', i ? 'only-night' : 'only-day'); img.src = `/brand/logos/${file}.svg`; img.alt = CHAIN_NAME[chain]; mark.appendChild(img); });
+    if (head === host) head.appendChild(mark); else head.insertBefore(mark, head.firstChild);
+  });
+
+  // ── sections fold open and closed; the choice is kept per viewer ─
+  const FOLD_KEY = 'astra.folded';
+  let folded = [];
+  try { folded = JSON.parse(localStorage.getItem(FOLD_KEY) || '[]'); } catch { folded = []; }
+  const setFolded = (section, fold) => {
+    section.classList.toggle('folded', fold);
+    section.querySelector('.fold')?.setAttribute('aria-expanded', String(!fold));
+    folded = fold ? [...new Set([...folded, section.id])] : folded.filter((id) => id !== section.id);
+    try { localStorage.setItem(FOLD_KEY, JSON.stringify(folded)); } catch { /* private mode */ }
+  };
+  document.querySelectorAll('main > .section[id]').forEach((section) => {
+    const h2 = section.querySelector('.section-head h2');
+    if (!h2) return;
+    const btn = el('button', 'fold');
+    btn.type = 'button';
+    btn.setAttribute('aria-controls', section.id);
+    btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>';
+    // a single-chain section is titled by the chain's logo alone
+    const mark = section.querySelector('.section-head > .chain-mark');
+    btn.appendChild(mark || document.createTextNode(h2.textContent));
+    clear(h2).appendChild(btn);
+    // the whole head bar toggles, the button inside keeps it reachable by keyboard
+    section.querySelector('.section-head').addEventListener('click', () => setFolded(section, !section.classList.contains('folded')));
+    if (folded.includes(section.id)) setFolded(section, true); else btn.setAttribute('aria-expanded', 'true');
+  });
+  // a menu link opens its section
+  document.querySelectorAll('nav a[href^="#"]').forEach((a) => a.addEventListener('click', () => { const s = document.querySelector(a.getAttribute('href')); if (s?.classList.contains('folded')) setFolded(s, false); }));
 
   loadAll().then(schedule);
 })();

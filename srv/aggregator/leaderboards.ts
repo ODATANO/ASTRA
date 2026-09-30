@@ -12,7 +12,7 @@ import { GRAN_MS, bucketStart, iso, type Window } from './time';
 
 const { SELECT } = cds.ql;
 
-export type Dimension = 'token' | 'policy' | 'script' | 'address' | 'producer' | 'pool' | 'drep' | 'tokenHolder';
+export type Dimension = 'token' | 'policy' | 'script' | 'address' | 'producer' | 'pool' | 'drep' | 'tokenHolder' | 'contract' | 'circuit';
 
 export const LEADERBOARD_WINDOWS = ['24h', '7d', '14d', '30d', 'epoch'] as const;
 export type LeaderboardWindow = (typeof LEADERBOARD_WINDOWS)[number];
@@ -100,12 +100,14 @@ export async function collectEntities(
     windowEnd = latest;
   } else {
     const r = rangeFor(window, now);
+    // summed per entity in the database: one row per entity instead of one per entity and period
     rows = await db.run(
       SELECT.from(ENTITIES)
-        .columns('entityId', 'count', 'sum', 'fromHeight', 'toHeight')
+        .columns('entityId', 'sum(count) as count', 'sum(sum) as sum', 'min(fromHeight) as fromHeight', 'max(toHeight) as toHeight')
         .where({ chain, dimension, metricId, subjectId: subject, granularity: r.granularity })
         .where({ bucketStart: { '>=': iso(r.start) } })
-        .where({ bucketStart: { '<': iso(r.end) } }),
+        .where({ bucketStart: { '<': iso(r.end) } })
+        .groupBy('entityId'),
     );
     windowStart = iso(r.start);
     windowEnd = iso(r.end);

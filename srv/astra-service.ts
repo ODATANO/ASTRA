@@ -17,7 +17,7 @@ import type { LeaderboardWindow } from './aggregator/leaderboards';
 
 const { SELECT } = cds.ql;
 const CHAINS: Chain[] = ['cardano', 'midnight'];
-const DIMENSIONS: Dimension[] = ['token', 'policy', 'script', 'address', 'producer', 'pool', 'drep', 'tokenHolder'];
+const DIMENSIONS: Dimension[] = ['token', 'policy', 'script', 'address', 'producer', 'pool', 'drep', 'tokenHolder', 'contract', 'circuit'];
 /** Fee figures of the overview are reported while the fee data reaches to within this of the newest block. */
 const FEES_CURRENT_SEC = 3600;
 

@@ -64,13 +64,15 @@ entity Transactions : cuid, managed {
 
     // crawler classification
     txType                   : TxType;
-    isShielded               : Boolean default false;
+    // Carries zswap coins. Null until the payload is decoded or the pallet map says so.
+    isShielded               : Boolean;
     senderAddress            : String(256); // unshielded txs only
     receiverAddress          : String(256); // unshielded txs only
     nightAmount              : BigInt;
     dustConsumed             : BigInt; // DUST the transaction's spends declare
-    hasProof                 : Boolean default false;
-    proofHash                : HexEncoded;
+    // Carries a contract call or zswap proof; the DUST fee spend's proof does not count.
+    hasProof                 : Boolean;
+    proofHash                : HexEncoded; // not set
     contractAddress          : HexEncoded;
     circuitName              : String(100); // contract calls only
     size                     : Integer; // bytes
@@ -127,8 +129,15 @@ entity ContractActions : cuid, managed {
     // their circuit names and states would be assigned by chance.
     actionIndex        : Integer;
     address            : HexEncoded; // from the pallet's contract event
-    state              : LargeBinary; // not on the block; the indexer supplement fills it
+    // Not on the block; the indexer supplement fills them. The full state is
+    // kept only under `crawler.contractStateHistory` (watched / all); the hash
+    // and size always, the newest state per contract in ContractStates.
+    state              : LargeBinary;
     zswapState         : LargeBinary;
+    stateHash          : HexEncoded; // sha256 of the state bytes
+    stateSize          : Integer; // bytes
+    zswapStateHash     : HexEncoded; // sha256 of the zswap state bytes
+    zswapStateSize     : Integer; // bytes
     actionType         : ContractActionType not null;
     entryPoint         : String(256); // CALL only
 
@@ -142,6 +151,17 @@ entity ContractBalances : cuid {
     tokenType      : HexEncoded not null;
     amount         : BigInt not null; // u128
     contractAction : Association to ContractActions;
+}
+
+/** The newest state per contract, from the action at the highest supplemented height. */
+entity ContractStates : managed {
+    key address        : HexEncoded;
+        height         : Integer64 not null; // block of the action the state comes from
+        state          : LargeBinary;
+        zswapState     : LargeBinary;
+        stateHash      : HexEncoded;
+        zswapStateHash : HexEncoded;
+        contractAction : Association to ContractActions;
 }
 
 // The ledger identifies a UTXO by its intent and output number, and one
@@ -218,6 +238,7 @@ entity AgentGrants : cuid, managed {
     deploysUsed       : Integer default 0; // reserved before broadcast; refunded only on rejection
     deployedContracts : LargeString; // JSON array of addresses deployed under this grant; sponsorable beyond floor ∩ grant
     allowedTokenTypes : LargeString; // JSON array of raw shielded token types the sponsor pays offers for; null = platform floor
+    mintedTokenTypes  : LargeString; // JSON array of raw token types minted under this grant; sponsorable beyond floor ∩ grant
     validUntil        : Timestamp; // null = no expiry
     isActive          : Boolean default true;
     revokedAt         : Timestamp;
@@ -337,6 +358,8 @@ entity BackgroundJobs : cuid, managed {
     chainBlockHeight    : Integer;
     chainBlockHash      : HexEncoded;
     indexerTxHash       : HexEncoded;
+    // Batches: JSON [{ segment, calls, applied }] per call segment, set with the confirmed outcome.
+    chainSegments       : LargeString;
 }
 
 entity PrivateStates {
@@ -499,4 +522,12 @@ entity NightBalances {
 
         lastUpdatedHeight  : Integer64;
         lastUpdatedAt      : Timestamp;
+}
+
+/** The process running the background work on this database; renewed by heartbeat, released on stop. */
+entity InstanceLeases {
+    key role        : String(20);
+        instanceId  : String(200);
+        acquiredAt  : Timestamp;
+        heartbeatAt : Timestamp;
 }

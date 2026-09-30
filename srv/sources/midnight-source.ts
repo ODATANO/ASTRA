@@ -9,6 +9,8 @@
  *   TransactionFees.paidFees / estimatedFees   specks (DUST atoms, 1 DUST = 10^15) as decimal strings;
  *                             the crawler writes 0, the indexer supplement pass fills the real
  *                             value later (SyncState.lastSupplementedHeight)
+ *   Transactions.payloadDecode, dustConsumed (specks), dust/zswap counts, circuitName
+ *                             filled by the ledger-payload decode pass (SyncState.lastDecodedHeight)
  */
 import cds from '@sap/cds';
 import type { BlockRow, ChainSource, ReorgRow, SourceTip, TxRow } from './types';
@@ -44,6 +46,7 @@ export class MidnightSource implements ChainSource {
       lastIndexedAt: row.lastIndexedAt ?? null,
       network: row.networkId ?? null,
       feeHeight: num(row.lastSupplementedHeight),
+      decodeHeight: num(row.lastDecodedHeight),
     };
   }
 
@@ -99,6 +102,15 @@ export class MidnightSource implements ChainSource {
       { ref: ['transactionFees', 'paidFees'], as: 'paidFees' },
       { ref: ['transactionFees', 'estimatedFees'], as: 'estimatedFees' },
       { ref: ['transactionResult', 'status'], as: 'status' },
+      { ref: ['payloadDecode'] },
+      { ref: ['dustConsumed'] },
+      { ref: ['dustSpendCount'] },
+      { ref: ['dustRegistrationCount'] },
+      { ref: ['zswapInputCount'] },
+      { ref: ['zswapOutputCount'] },
+      { ref: ['zswapTransientCount'] },
+      { ref: ['contractAddress'] },
+      { ref: ['circuitName'] },
     );
     (q as any).where({ 'block.height': { between: fromHeight, and: toHeight } });
     const rows = await this.run(q);
@@ -122,6 +134,15 @@ export class MidnightSource implements ChainSource {
           status: r.status ?? null,
           estimatedFees: est,
           hasFees: paid !== null,
+          decoded: r.payloadDecode === 'decoded',
+          dustConsumed: num(r.dustConsumed),
+          dustSpends: num(r.dustSpendCount),
+          dustRegistrations: num(r.dustRegistrationCount),
+          zswapInputs: num(r.zswapInputCount),
+          zswapOutputs: num(r.zswapOutputCount),
+          zswapTransients: num(r.zswapTransientCount),
+          contract: r.contractAddress ?? null,
+          circuit: r.circuitName ?? null,
         },
       });
     }

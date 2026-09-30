@@ -1,7 +1,9 @@
 /**
  * Secondary indexes the CDS model cannot declare. The EntityBuckets key starts with dimension and
- * entityId, so reads by time window (chain, granularity, bucketStart) would scan the table.
- * Created at start with CREATE INDEX IF NOT EXISTS; failures are logged, never fatal.
+ * entityId, so reads by time window (chain, granularity, bucketStart) or by metric would walk
+ * every entity of the dimension.
+ * Created at start with CREATE INDEX IF NOT EXISTS; failures are logged, never fatal. On a large
+ * live PostgreSQL create them with CREATE INDEX CONCURRENTLY first; the start is then a no-op.
  */
 import cds from '@sap/cds';
 
@@ -17,6 +19,11 @@ export interface IndexSpec {
 export const DB_INDEXES: readonly IndexSpec[] = Object.freeze([
   // leaderboard windows: entity rows of a chain and granularity in a time range
   { name: 'odatano_astra_entitybuckets_window', table: 'odatano_astra_EntityBuckets', columns: 'chain, granularity, bucketStart' },
+  // leaderboards: one dimension and metric over a time range
+  { name: 'odatano_astra_entitybuckets_rank', table: 'odatano_astra_EntityBuckets', columns: 'chain, dimension, metricId, subjectId, granularity, bucketStart' },
+  // reorg rewinds: buckets that reach above a height
+  { name: 'odatano_astra_entitybuckets_height', table: 'odatano_astra_EntityBuckets', columns: 'chain, toHeight' },
+  { name: 'odatano_astra_metricbuckets_height', table: 'odatano_astra_MetricBuckets', columns: 'chain, toHeight' },
 ]);
 
 export function indexStatement(spec: IndexSpec): string {

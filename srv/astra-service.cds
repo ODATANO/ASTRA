@@ -66,6 +66,7 @@ service AstraService {
     certs_other = 'certs.other';
     withdrawals_count = 'withdrawals.count';
     withdrawals_value = 'withdrawals.value';
+    withdrawals_zero = 'withdrawals.zero';
     stake_delegations = 'stake.delegations';
     governance_voteDelegations = 'governance.voteDelegations';
     tx_system = 'tx.system';
@@ -77,6 +78,16 @@ service AstraService {
     tx_failed = 'tx.failed';
     fees_estimated = 'fees.estimated';
     fees_estimateError = 'fees.estimateError';
+    tx_decoded = 'tx.decoded';
+    tx_zswap = 'tx.zswap';
+    dust_consumed = 'dust.consumed';
+    dust_spends = 'dust.spends';
+    dust_registrations = 'dust.registrations';
+    zswap_inputs = 'zswap.inputs';
+    zswap_outputs = 'zswap.outputs';
+    zswap_transients = 'zswap.transients';
+    contract_calls = 'contract.calls';
+    circuit_calls = 'circuit.calls';
   }
 
   /**
@@ -247,6 +258,7 @@ service AstraService {
         drepRetirements      : Integer64;
         otherCertificates    : Integer64;
         withdrawals          : Integer64;
+        zeroWithdrawals      : Integer64;       // of `withdrawals`: 0 ADA, submitted by script stake credentials
         withdrawnAda         : Decimal(38, 6);
         fromHeight           : Integer64;
         toHeight             : Integer64;
@@ -301,6 +313,10 @@ service AstraService {
   @readonly @cds.persistence.skip entity TopDelegatedPools : RankingRow {}
   /** DReps by vote delegation certificates received in the window; always-abstain and no-confidence rank as targets too. */
   @readonly @cds.persistence.skip entity TopVotedDReps     : RankingRow {}
+  /** Contracts by calls (Midnight). entityId = contract address. */
+  @readonly @cds.persistence.skip entity TopContracts      : RankingRow {}
+  /** Circuits by calls across contracts (Midnight). entityId = circuit name. */
+  @readonly @cds.persistence.skip entity TopCircuits       : RankingRow {}
 
   type WindowResult {
     chain       : astra.Chain;

@@ -53,8 +53,8 @@
     "brand": "node -e \"const fs=require('fs');fs.mkdirSync('app/brand/logos',{recursive:true});for(const f of ['astra-logo.svg','astra-logo-on-dark.svg','astra-icon.svg','odatano-logo.svg','odatano-logo-on-dark.svg','odatano-icon.svg','odatano-icon-on-dark.svg'])fs.copyFileSync('node_modules/@odatano/brand/logos/'+f,'app/brand/logos/'+f);fs.copyFileSync('node_modules/@odatano/brand/tokens.css','app/brand/tokens.css')\""
   },
   "sourceModels": {
-    "@odatano/core": "2.0.0-rc.20",
-    "@odatano/nightgate": "0.25.7"
+    "@odatano/core": "2.0.0-rc.26",
+    "@odatano/nightgate": "0.29.1"
   },
   "cds": {
     "requires": {

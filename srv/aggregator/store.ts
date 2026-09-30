@@ -269,15 +269,16 @@ async function upsertRows(tx: any, rows: Record<string, unknown>[], entity: stri
  */
 export async function rewindTo(tx: any, chain: Chain, forkHeight: number, _now = new Date().toISOString()): Promise<{ resumeFrom: number; dropped: number }> {
   // Both stores, or a reorg would leave the leaderboards counting orphaned blocks.
-  const [rows, entityRows] = await Promise.all([
-    tx.run(SELECT.from(BUCKETS).columns('fromHeight').where({ chain, toHeight: { '>': forkHeight } })),
-    tx.run(SELECT.from(ENTITIES).columns('fromHeight').where({ chain, toHeight: { '>': forkHeight } })),
+  const [low, entityLow] = await Promise.all([
+    tx.run(SELECT.one.from(BUCKETS).columns('min(fromHeight) as h', 'count(1) as n').where({ chain, toHeight: { '>': forkHeight } })),
+    tx.run(SELECT.one.from(ENTITIES).columns('min(fromHeight) as h', 'count(1) as n').where({ chain, toHeight: { '>': forkHeight } })),
   ]);
-  if (!rows.length && !entityRows.length) return { resumeFrom: forkHeight + 1, dropped: 0 };
+  const affected = Number(low?.n ?? 0);
+  if (!affected && !Number(entityLow?.n ?? 0)) return { resumeFrom: forkHeight + 1, dropped: 0 };
 
   let resumeFrom = forkHeight + 1;
-  for (const r of [...rows, ...entityRows]) {
-    const from = Number(r.fromHeight);
+  for (const r of [low, entityLow]) {
+    const from = r?.h === null || r?.h === undefined ? NaN : Number(r.h);
     if (Number.isFinite(from) && from < resumeFrom) resumeFrom = from;
   }
   // Delete from resumeFrom, not from the fork: the coarsest affected bucket starts there and
@@ -288,14 +289,36 @@ export async function rewindTo(tx: any, chain: Chain, forkHeight: number, _now =
   await tx.run(DELETE.from(ENTITIES).where({ chain, toHeight: { '>=': resumeFrom } }));
   // No rollup here: everything from resumeFrom on is gone, and the aggregation that follows
   // rebuilds minute, hour and day from the source as it walks forward.
-  return { resumeFrom, dropped: Number(dropped) || rows.length };
+  return { resumeFrom, dropped: Number(dropped) || affected };
 }
 
 /** Deletes all buckets of a chain (full recompute), or those touching heights >= fromHeight. */
+/**
+ * rewindTo for the metrics and leaderboard dimensions of one trailing pass: drops their buckets
+ * from the coarsest one reaching past `height` on and returns the height that pass resumes at.
+ */
+export async function rewindMetrics(tx: any, chain: Chain, metricIds: readonly string[], dimensions: readonly string[], height: number): Promise<number> {
+  const [low, entityLow] = await Promise.all([
+    tx.run(SELECT.one.from(BUCKETS).columns('min(fromHeight) as h').where({ chain, metricId: { in: [...metricIds] }, toHeight: { '>': height } })),
+    dimensions.length
+      ? tx.run(SELECT.one.from(ENTITIES).columns('min(fromHeight) as h').where({ chain, dimension: { in: [...dimensions] }, toHeight: { '>': height } }))
+      : null,
+  ]);
+  let resumeFrom = height + 1;
+  for (const r of [low, entityLow]) {
+    const from = r?.h === null || r?.h === undefined ? NaN : Number(r.h);
+    if (Number.isFinite(from) && from < resumeFrom) resumeFrom = from;
+  }
+  await tx.run(DELETE.from(BUCKETS).where({ chain, metricId: { in: [...metricIds] }, toHeight: { '>=': resumeFrom } }));
+  if (dimensions.length) await tx.run(DELETE.from(ENTITIES).where({ chain, dimension: { in: [...dimensions] }, toHeight: { '>=': resumeFrom } }));
+  return resumeFrom;
+}
+
 export async function dropBuckets(tx: any, chain: Chain, fromHeight: number | null): Promise<void> {
   if (fromHeight === null) {
     await tx.run(DELETE.from(BUCKETS).where({ chain }));
-    await tx.run(DELETE.from(ENTITIES).where({ chain }));
+    // epoch snapshots are not derived from blocks; the block walk would never write them back
+    await tx.run(DELETE.from(ENTITIES).where({ chain, granularity: { '!=': 'epoch' } }));
     return;
   }
   await rewindTo(tx, chain, fromHeight - 1);

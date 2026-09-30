@@ -90,6 +90,8 @@ export const RANKINGS: Record<string, RankingDef> = {
   TopDReps:          { dimension: 'drep',     metric: 'governance.votingPower', by: 'sum',   windows: ['epoch'], entity: 'DRep id' },
   TopDelegatedPools: { dimension: 'pool',     metric: 'stake.delegations',      by: 'count', windows: FLOW,      entity: 'pool id' },
   TopVotedDReps:     { dimension: 'drep',     metric: 'governance.voteDelegations', by: 'count', windows: FLOW,  entity: 'DRep id, drep_always_abstain or drep_always_no_confidence' },
+  TopContracts:      { dimension: 'contract', metric: 'contract.calls',         by: 'count', windows: FLOW,      entity: 'contract address' },
+  TopCircuits:       { dimension: 'circuit',  metric: 'circuit.calls',          by: 'count', windows: FLOW,      entity: 'circuit name' },
 };
 
 export interface RankingRow extends Record<string, unknown> {

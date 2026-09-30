@@ -45,8 +45,9 @@
       <a href="/" class="brand"><img class="wordmark only-day" src="/brand/logos/astra-logo.svg" alt="ODATANO ASTRA" /><img class="wordmark only-night" src="/brand/logos/astra-logo-on-dark.svg" alt="ODATANO ASTRA" /><img class="mark" src="/brand/logos/astra-icon.svg" alt="ODATANO ASTRA" /><span class="net" id="netBadge">…</span></a>
       <nav id="menu">
         <div class="nav-links">
-          <a href="#activity">Activity</a>
-          <a href="#rankings">Rankings</a>
+          <a href="#compare">Compare</a>
+          <a href="#cardano" data-nav="cardano">Cardano</a>
+          <a href="#midnight" data-nav="midnight">Midnight</a>
           <a href="/odata/v4/astra/$metadata" id="apiLink" title="API reference">API</a>
         </div>
       </nav>
@@ -88,65 +89,114 @@
       <button class="btn btn--ghost btn--sm" id="refresh" type="button">Refresh</button>
     </div>
 
-    <section class="section" id="now">
-      <div class="section-head"><h2>Now</h2></div>
-      <div class="grid chains">
-        <article class="card product cardano" id="ovCardano">
-          <div class="logo"><img class="chain only-day" src="/brand/logos/cardano-horizontal-blue.svg" alt="Cardano" /><img class="chain only-night" src="/brand/logos/cardano-horizontal-white.svg" alt="Cardano" /><span class="spacer"></span><span class="pill" data-sync>…</span></div>
-          <div class="stats" data-stats></div>
-        </article>
-        <article class="card product midnight" id="ovMidnight">
-          <div class="logo"><img class="chain only-day" src="/brand/logos/midnight-logo-horizontal-dark.svg" alt="Midnight" /><img class="chain only-night" src="/brand/logos/midnight-logo-horizontal-white.svg" alt="Midnight" /><span class="spacer"></span><span class="pill" data-sync>…</span></div>
-          <div class="stats" data-stats></div>
-        </article>
-      </div>
-    </section>
-
-    <section class="section" id="heartbeat">
-      <div class="section-head"><h2>Heartbeat</h2></div>
-      <div class="grid">
-        <article class="card chart" data-chart="hbCardano"><div class="chart-head"><h3>Cardano</h3><span class="sub">blocks / min</span></div></article>
-        <article class="card chart" data-chart="hbMidnight"><div class="chart-head"><h3>Midnight</h3><span class="sub">blocks / min</span></div></article>
-      </div>
-    </section>
-
-    <section class="section" id="activity">
-      <div class="section-head"><h2>Activity</h2></div>
+    <section class="section panel" id="compare">
+      <div class="section-head"><h2>Compare</h2></div>
       <div class="stack">
+        <div class="grid chains">
+          <article class="card product cardano" id="ovCardano"><div class="logo"><img class="chain only-day" src="/brand/logos/cardano-horizontal-blue.svg" alt="Cardano" /><img class="chain only-night" src="/brand/logos/cardano-horizontal-white.svg" alt="Cardano" /><span class="spacer"></span><span class="pill" data-sync>…</span></div><div class="stats" data-stats></div></article>
+          <article class="card product midnight" id="ovMidnight"><div class="logo"><img class="chain only-day" src="/brand/logos/midnight-logo-horizontal-dark.svg" alt="Midnight" /><img class="chain only-night" src="/brand/logos/midnight-logo-horizontal-white.svg" alt="Midnight" /><span class="spacer"></span><span class="pill" data-sync>…</span></div><div class="stats" data-stats></div></article>
+        </div>
+        <div class="grid">
+          <article class="card" data-kf="cardano" data-mark="cardano"><div class="chart-head"><h3>Key figures</h3><span class="sub">vs. previous window</span></div><div class="stats compact" data-kfstats></div></article>
+          <article class="card" data-kf="midnight" data-mark="midnight"><div class="chart-head"><h3>Key figures</h3><span class="sub">vs. previous window</span></div><div class="stats compact" data-kfstats></div></article>
+        </div>
+        <div class="grid">
+          <article class="card chart" data-chart="hbCardano" data-mark="cardano"><div class="chart-head"><h3>Blocks</h3><span class="sub">per minute, last hour</span></div></article>
+          <article class="card chart" data-chart="hbMidnight" data-mark="midnight"><div class="chart-head"><h3>Blocks</h3><span class="sub">per minute, last hour</span></div></article>
+        </div>
         <article class="card chart" data-chart="tx"><div class="chart-head"><h3>Transactions</h3><span class="sub" data-sub>per day</span></div></article>
         <div class="grid">
-          <article class="card chart" data-chart="feesCardano"><div class="chart-head"><h3>Fees on Cardano</h3><span class="sub">per transaction</span></div></article>
-          <article class="card chart" data-chart="feesMidnight"><div class="chart-head"><h3>Fees on Midnight</h3><span class="sub">per transaction</span></div></article>
+          <article class="card chart" data-chart="feesCardano" data-mark="cardano"><div class="chart-head"><h3>Fees</h3><span class="sub">per transaction</span></div></article>
+          <article class="card chart" data-chart="feesMidnight" data-mark="midnight"><div class="chart-head"><h3>Fees</h3><span class="sub">per transaction</span></div></article>
         </div>
         <div class="grid">
-          <article class="card chart" data-chart="distCardano"><div class="chart-head"><h3>Fee distribution, Cardano</h3><span class="sub">transactions per fee band</span></div></article>
-          <article class="card chart" data-chart="distMidnight"><div class="chart-head"><h3>Fee distribution, Midnight</h3><span class="sub">transactions per fee band</span></div></article>
+          <article class="card chart" data-chart="distCardano" data-mark="cardano"><div class="chart-head"><h3>Fee distribution</h3><span class="sub">transactions per fee band</span></div></article>
+          <article class="card chart" data-chart="distMidnight" data-mark="midnight"><div class="chart-head"><h3>Fee distribution</h3><span class="sub">transactions per fee band</span></div></article>
         </div>
         <div class="grid">
-          <article class="card chart" data-chart="mixCardano"><div class="chart-head"><h3>Transaction mix, Cardano</h3><span class="sub">share of transactions</span></div></article>
-          <article class="card chart" data-chart="mixMidnight"><div class="chart-head"><h3>Transaction mix, Midnight</h3><span class="sub">share of transactions</span></div></article>
+          <article class="card chart" data-chart="mixCardano" data-mark="cardano"><div class="chart-head"><h3>Transaction mix</h3><span class="sub">share of transactions</span></div></article>
+          <article class="card chart" data-chart="mixMidnight" data-mark="midnight"><div class="chart-head"><h3>Transaction mix</h3><span class="sub">share of transactions</span></div></article>
         </div>
         <div class="grid">
-          <article class="card chart" data-chart="empty"><div class="chart-head"><h3>Empty blocks</h3><span class="sub">share of blocks</span></div></article>
           <article class="card chart" data-chart="txPerBlock"><div class="chart-head"><h3>Transactions per block</h3><span class="sub">average</span></div></article>
+          <article class="card chart" data-chart="empty"><div class="chart-head"><h3>Empty blocks</h3><span class="sub">share of blocks</span></div></article>
+        </div>
+        <article class="card chart" data-chart="interval"><div class="chart-head"><h3>Block interval</h3><span class="sub">seconds, median and p95</span></div></article>
+        <div class="grid">
+          <article class="card" data-board="producersCardano" data-mark="cardano"><div class="chart-head"><h3>Block producers</h3><span class="sub">blocks produced</span></div><div class="stats compact" data-conc></div><div class="table-wrap" data-table></div></article>
+          <article class="card" data-board="producersMidnight" data-mark="midnight"><div class="chart-head"><h3>Block producers</h3><span class="sub">blocks produced</span></div><div class="stats compact" data-conc></div><div class="table-wrap" data-table></div></article>
         </div>
       </div>
     </section>
 
-    <section class="section" id="rankings">
-      <div class="section-head"><h2>Rankings</h2></div>
+    <section class="section panel" id="cardano" data-chain="cardano">
+      <div class="section-head" data-mark="cardano"><h2>Cardano</h2></div>
       <div class="stack">
         <div class="grid">
-          <article class="card" data-board="producersCardano"><div class="chart-head"><h3>Block producers, Cardano</h3><span class="sub">blocks produced</span></div><div class="stats compact" data-conc></div><div class="table-wrap" data-table></div></article>
-          <article class="card" data-board="producersMidnight"><div class="chart-head"><h3>Block producers, Midnight</h3><span class="sub">blocks produced</span></div><div class="stats compact" data-conc></div><div class="table-wrap" data-table></div></article>
+          <article class="card chart" data-chart="volume"><div class="chart-head"><h3>Value transferred</h3><span class="sub" data-sub>per day</span></div></article>
+          <article class="card chart" data-chart="utxoFlow"><div class="chart-head"><h3>UTxOs created and spent</h3><span class="sub" data-sub>per day</span></div></article>
+        </div>
+        <article class="card chart" data-chart="blockSize"><div class="chart-head"><h3>Block size</h3><span class="sub">bytes, median and p95</span></div></article>
+        <h3 class="subhead">Tokens</h3>
+        <div class="grid">
+          <article class="card chart" data-chart="tokenTransfers"><div class="chart-head"><h3>Token transfers</h3><span class="sub" data-sub>per day</span></div></article>
+          <article class="card chart" data-chart="supply"><div class="chart-head"><h3>Token mints and burns</h3><span class="sub" data-sub>per day</span></div></article>
         </div>
         <div class="grid">
-          <article class="card" data-board="tokens"><div class="chart-head"><h3>Tokens, Cardano</h3><span class="sub">transfers</span></div><div class="table-wrap" data-table></div></article>
-          <article class="card" data-board="policies"><div class="chart-head"><h3>Policies, Cardano</h3><span class="sub">transfers</span></div><div class="table-wrap" data-table></div></article>
+          <article class="card" data-board="tokens"><div class="chart-head"><h3>Tokens</h3><span class="sub">transfers</span></div><div class="table-wrap" data-table></div></article>
+          <article class="card" data-board="policies"><div class="chart-head"><h3>Policies</h3><span class="sub">transfers</span></div><div class="table-wrap" data-table></div></article>
         </div>
+        <h3 class="subhead">Addresses</h3>
         <div class="grid">
-          <article class="card" data-board="addresses"><div class="chart-head"><h3>Addresses, Cardano</h3><span class="sub">value received</span></div><div class="table-wrap" data-table></div></article>
-          <article class="card" data-board="scripts"><div class="chart-head"><h3>Script addresses, Cardano</h3><span class="sub">value received</span></div><div class="table-wrap" data-table></div></article>
+          <article class="card" data-board="addresses"><div class="chart-head"><h3>Addresses</h3><span class="sub">value received</span></div><div class="table-wrap" data-table></div></article>
+          <article class="card" data-board="scripts"><div class="chart-head"><h3>Script addresses</h3><span class="sub">value received</span></div><div class="table-wrap" data-table></div></article>
+        </div>
+        <div class="stack" id="stake">
+          <h3 class="subhead">Stake &amp; Governance</h3>
+          <div class="stats" id="stakeStats"></div>
+          <div class="grid">
+            <article class="card chart" data-chart="delegations"><div class="chart-head"><h3>Delegations</h3><span class="sub" data-sub>per day</span></div></article>
+            <article class="card chart" data-chart="lifecycle"><div class="chart-head"><h3>Pool and DRep lifecycle</h3><span class="sub" data-sub>per day</span></div></article>
+          </div>
+          <div class="grid">
+            <article class="card chart" data-chart="withdrawn"><div class="chart-head"><h3>Withdrawn</h3><span class="sub" data-sub>per day</span></div></article>
+            <article class="card chart" data-chart="withdrawals"><div class="chart-head"><h3>Withdrawals</h3><span class="sub" data-sub>per day</span></div></article>
+          </div>
+          <div class="grid">
+            <article class="card" data-board="pools"><div class="chart-head"><h3>Pools by live stake</h3><span class="sub" data-epoch>latest epoch</span></div><div class="stats compact" data-conc></div><div class="table-wrap" data-table></div></article>
+            <article class="card" data-board="dreps"><div class="chart-head"><h3>DReps by voting power</h3><span class="sub" data-epoch>latest epoch</span></div><div class="stats compact" data-conc></div><div class="table-wrap" data-table></div></article>
+          </div>
+          <div class="grid">
+            <article class="card" data-board="delegatedPools"><div class="chart-head"><h3>Pools by new delegations</h3><span class="sub">certificates</span></div><div class="table-wrap" data-table></div></article>
+            <article class="card" data-board="votedDReps"><div class="chart-head"><h3>DReps by new delegations</h3><span class="sub">certificates</span></div><div class="table-wrap" data-table></div></article>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section panel" id="midnight" data-chain="midnight">
+      <div class="section-head" data-mark="midnight"><h2>Midnight</h2></div>
+      <div class="stack">
+        <div class="grid">
+          <article class="card chart" data-chart="contractTx"><div class="chart-head"><h3>Contract deploys and calls</h3><span class="sub" data-sub>per day</span></div></article>
+          <article class="card chart" data-chart="txSize"><div class="chart-head"><h3>Transaction size</h3><span class="sub">bytes, median and p95</span></div></article>
+        </div>
+        <article class="card chart" data-chart="feeErrMidnight"><div class="chart-head"><h3>Fee estimate error</h3><span class="sub">paid minus estimated</span></div></article>
+        <div class="stack" id="ledger">
+          <h3 class="subhead">Ledger</h3>
+          <div class="stats compact" id="decodeStatus" hidden></div>
+          <div class="grid">
+            <article class="card chart" data-chart="dust"><div class="chart-head"><h3>DUST consumed</h3><span class="sub" data-sub>per day</span></div></article>
+            <article class="card chart" data-chart="dustEvents"><div class="chart-head"><h3>DUST spends and registrations</h3><span class="sub" data-sub>per day</span></div></article>
+          </div>
+          <div class="grid">
+            <article class="card chart" data-chart="zswap"><div class="chart-head"><h3>Shielded activity</h3><span class="sub" data-sub>per day</span></div></article>
+            <article class="card chart" data-chart="zswapShare"><div class="chart-head"><h3>Shielded share</h3><span class="sub">of decoded transactions</span></div></article>
+          </div>
+          <div class="grid">
+            <article class="card" data-board="contracts"><div class="chart-head"><h3>Contracts</h3><span class="sub">calls</span></div><div class="table-wrap" data-table></div></article>
+            <article class="card" data-board="circuits"><div class="chart-head"><h3>Circuits</h3><span class="sub">calls</span></div><div class="table-wrap" data-table></div></article>
+          </div>
         </div>
       </div>
     </section>
@@ -155,7 +205,6 @@
 
   <footer><div class="wrap">
     <img class="only-day" src="/brand/logos/odatano-logo.svg" alt="ODATANO" /><img class="only-night" src="/brand/logos/odatano-logo-on-dark.svg" alt="ODATANO" />
-    <a href="https://odatano.dev/docs/security/">Security and data</a>
     <a href="https://odatano.dev/imprint/">Imprint</a>
     <a href="https://odatano.dev/privacy/">Privacy</a>
     <a href="https://github.com/ODATANO/ASTRA" target="_blank" rel="noopener">GitHub</a>

@@ -9,8 +9,12 @@
 import cds from '@sap/cds';
 import { startScheduler, stopScheduler } from './aggregator/scheduler';
 import { ensureDbIndexes } from './aggregator/db-indexes';
+import { guardPostgresPools } from './pg-guard';
 
 const LOG = cds.log('astra');
+
+// Before any database connects: a restarted PostgreSQL must not take the server down.
+guardPostgresPools();
 
 // ---------------------------------------------------------------- sister instances
 
