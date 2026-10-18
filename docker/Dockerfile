@@ -25,6 +25,6 @@ RUN chmod +x docker/entrypoint.sh && chown -R node:node /app
 USER node
 EXPOSE 4004
 HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
-  CMD curl -fsS "http://localhost:${PORT}/odata/v4/astra/SyncStatus?\$top=1" > /dev/null || exit 1
+  CMD curl -fsS "http://localhost:${PORT}/odata/v4/analytics/SyncStatus?\$top=1" > /dev/null || exit 1
 ENTRYPOINT ["docker/entrypoint.sh"]
 CMD ["serve"]

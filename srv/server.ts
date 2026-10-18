@@ -10,7 +10,7 @@
 import cds from '@sap/cds';
 import fs from 'node:fs';
 import path from 'node:path';
-import type { Application, Request, Response } from 'express';
+import type { Application, NextFunction, Request, Response } from 'express';
 import { startScheduler, stopScheduler } from './aggregator/scheduler';
 import { ensureDbIndexes } from './aggregator/db-indexes';
 import { guardPostgresPools } from './pg-guard';
@@ -39,7 +39,7 @@ function configuredNetworks(): NetworkEntry[] {
 
 async function isUp(url: string): Promise<boolean> {
   try {
-    const res = await fetch(`${url}/odata/v4/astra/SyncStatus?$top=1`, { signal: AbortSignal.timeout(PROBE_TIMEOUT_MS), headers: { accept: 'application/json' } });
+    const res = await fetch(`${url}/odata/v4/analytics/SyncStatus?$top=1`, { signal: AbortSignal.timeout(PROBE_TIMEOUT_MS), headers: { accept: 'application/json' } });
     return res.ok;
   } catch {
     return false;
@@ -116,7 +116,25 @@ function requestOrigin(req: Request): string {
   return `${proto}://${host}`;
 }
 
+const SERVICE_PATH = '/odata/v4/analytics';
+const OLD_SERVICE_PATH = '/odata/v4/astra';
+let oldPathWarned = false;
+
+/** The old service path keeps answering for one release. */
+function rewriteOldServicePath(req: Request, _res: Response, next: NextFunction): void {
+  const url = req.url;
+  if (url === OLD_SERVICE_PATH || url.startsWith(OLD_SERVICE_PATH + '/') || url.startsWith(OLD_SERVICE_PATH + '?')) {
+    if (!oldPathWarned) {
+      oldPathWarned = true;
+      LOG.warn(`${OLD_SERVICE_PATH} is deprecated, use ${SERVICE_PATH}; the old path goes in a later release`);
+    }
+    req.url = SERVICE_PATH + url.slice(OLD_SERVICE_PATH.length);
+  }
+  next();
+}
+
 cds.on('bootstrap', (app: Application) => {
+  app.use(rewriteOldServicePath);
   app.get(Object.keys(PAGES), (req: Request, res: Response) => {
     const meta = PAGES[req.path];
     const html = pageHtml()

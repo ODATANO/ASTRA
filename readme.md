@@ -4,7 +4,7 @@ Analytics for Cardano and Midnight as OData V4, with a public dashboard on top.
 ASTRA reads the databases the hosted [ODATANO](https://github.com/ODATANO/ODATANO)
 and [NIGHTGATE](https://github.com/ODATANO/NIGHTGATE) instances already fill,
 aggregates them into time buckets (minute, hour, day) and serves windows, series,
-rankings and cross-chain comparisons under `/odata/v4/astra`. Every number names
+rankings and cross-chain comparisons under `/odata/v4/analytics`. Every number names
 the block range it was computed from.
 
 ## How it works
@@ -52,12 +52,12 @@ Ready-made entities need no metric id and take `$filter`, `$orderby`, `$top`/`$s
 | `Metrics`, `MetricBuckets`, `EntityBuckets`, `Snapshots`, `Reorgs`, `VerificationRuns`, `SyncStatus` | the raw aggregates and the state of the pipeline, with `$apply` |
 
 ```http
-GET /odata/v4/astra/ChainOverview
-GET /odata/v4/astra/KeyFigures?$filter=chain eq 'cardano' and window eq '7d'
-GET /odata/v4/astra/FeesDaily?$top=14&$orderby=day desc
-GET /odata/v4/astra/TopBlockProducers?$filter=window eq '7d' and rank le 10
-GET /odata/v4/astra/compare(metric='tx.count',window='14d')
-GET /odata/v4/astra/getSeries(chain='midnight',metric='fees.paid',window='24h')
+GET /odata/v4/analytics/ChainOverview
+GET /odata/v4/analytics/KeyFigures?$filter=chain eq 'cardano' and window eq '7d'
+GET /odata/v4/analytics/FeesDaily?$top=14&$orderby=day desc
+GET /odata/v4/analytics/TopBlockProducers?$filter=window eq '7d' and rank le 10
+GET /odata/v4/analytics/compare(metric='tx.count',window='14d')
+GET /odata/v4/analytics/getSeries(chain='midnight',metric='fees.paid',window='24h')
 ```
 
 Both chains share every entity: a column a chain does not have is null and the row stays.
@@ -88,7 +88,7 @@ npm install
 npm run sources:sync        # db/*.cds of @odatano/core and @odatano/nightgate (pinned versions)
 npm run sources:seed        # synthetic chain data → sources/*.sqlite
 npx cds deploy              # ASTRA's own db.sqlite
-npm run watch               # http://localhost:4004/ (dashboard), /odata/v4/astra (service)
+npm run watch               # http://localhost:4004/ (dashboard), /odata/v4/analytics (service)
 ```
 
 `npm run sources:seed` again appends blocks up to now; `-- --reorg` simulates a reorg.
@@ -104,7 +104,7 @@ container plus its own Postgres for aggregates, joined to the source containers'
 2. Copy the repo to the host and create `.env` from `.env.example` (the `astra_ro` URLs, the
    source containers' Docker networks, a password for ASTRA's own Postgres).
 3. `docker compose -f docker/docker-compose.yml --env-file .env up -d --build`
-4. `curl -s 127.0.0.1:4017/odata/v4/astra/SyncStatus` shows the backfill; `backfilling` turns false once caught up.
+4. `curl -s 127.0.0.1:4017/odata/v4/analytics/SyncStatus` shows the backfill; `backfilling` turns false once caught up.
 
 Nothing is published beyond loopback; a reverse proxy in front publishes the service or
 the dashboard. The pages read `ChainOverview`, `KeyFigures`, `SyncStatus`, `StakeEpochs`,

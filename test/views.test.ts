@@ -13,6 +13,7 @@ import os from 'node:os';
 import { mkdtempSync } from 'node:fs';
 import { register } from 'tsx/cjs/api';
 import cds from '@sap/cds';
+import '../srv/server'; // the bootstrap hook that serves the old service path
 import { addSample } from '../srv/aggregator/histogram';
 import { newMerged, toRow, type Merged } from '../srv/aggregator/store';
 import { DAILY_VIEWS, readDailyView, readStakeEpochs } from '../srv/views/daily';
@@ -42,7 +43,7 @@ function merged(values: number[], from: number, to: number): Merged {
 let server: any;
 let url: string;
 const get = async (p: string) => {
-  const res = await fetch(url + '/odata/v4/astra' + p);
+  const res = await fetch(url + '/odata/v4/analytics' + p);
   const text = await res.text();
   let json: any;
   try { json = JSON.parse(text); } catch { json = { raw: text }; }
@@ -101,6 +102,14 @@ beforeAll(async () => {
 afterAll(async () => { await new Promise(r => server?.close(r)); });
 
 describe('catalogue and enum', () => {
+  it('answers the old service path like the new one', async () => {
+    const now = await fetch(url + '/odata/v4/analytics/SyncStatus?$top=1');
+    const old = await fetch(url + '/odata/v4/astra/SyncStatus?$top=1');
+    expect(old.status).toBe(now.status);
+    expect(await old.text()).toBe(await now.text());
+    expect((await fetch(url + '/odata/v4/astra-x/SyncStatus')).status).toBe(404);
+  });
+
   it('MetricId lists exactly the ids of the catalogue', () => {
     const def: any = cds.model!.definitions['AstraService.MetricId'];
     const inEnum = new Set(Object.values(def.enum as Record<string, { val: string }>).map(e => e.val));

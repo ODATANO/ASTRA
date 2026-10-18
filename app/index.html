@@ -24,8 +24,8 @@
   <link rel="stylesheet" href="/astra.css" />
   <script>try{var t=localStorage.getItem('odatano.theme');document.documentElement.dataset.theme=(t==='night'||t==='day')?t:'night';}catch(e){document.documentElement.dataset.theme='night';}</script>
   <script>
-    // `api` may be overridden for local work with ?api=http://host:4017/odata/v4/astra.
-    window.ASTRA_CONFIG = { api: '/odata/v4/astra', refreshMs: 60000 };
+    // `api` may be overridden for local work with ?api=http://host:4017/odata/v4/analytics.
+    window.ASTRA_CONFIG = { api: '/odata/v4/analytics', refreshMs: 60000 };
   </script>
 </head>
 <body>
@@ -36,7 +36,7 @@
         <div class="nav-links">
           <a href="/cardano" data-nav="cardano">Cardano</a>
           <a href="/midnight" data-nav="midnight">Midnight</a>
-          <a href="/odata/v4/astra/$metadata" id="apiLink" title="API reference">API</a>
+          <a href="/odata/v4/analytics/$metadata" id="apiLink" title="API reference">API</a>
         </div>
       </nav>
       <div class="top-actions">

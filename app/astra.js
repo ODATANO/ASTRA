@@ -1,4 +1,4 @@
-/* Browser side of the ODATANO ASTRA dashboard: reads /odata/v4/astra, draws the
+/* Browser side of the ODATANO ASTRA dashboard: reads /odata/v4/analytics, draws the
    charts as inline SVG (no framework, no chart library). One instance = one network; the
    path picks the chain (/cardano, /midnight; / compares both) and the filter row's window
    scopes every chart and ranking below it. */
@@ -6,7 +6,7 @@
   'use strict';
   const CFG = window.ASTRA_CONFIG || {};
   const params = new URLSearchParams(location.search);
-  const API = (params.get('api') || CFG.api || '/odata/v4/astra').replace(/\/+$/, '');
+  const API = (params.get('api') || CFG.api || '/odata/v4/analytics').replace(/\/+$/, '');
   const CHAINS = ['cardano', 'midnight'];
   const CHAIN_NAME = { cardano: 'Cardano', midnight: 'Midnight' };
   const COLOR = { cardano: 'var(--series-cardano)', midnight: 'var(--series-midnight)', mute: 'var(--series-mute)' };

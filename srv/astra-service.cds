@@ -5,7 +5,7 @@ using { odatano.astra as astra } from '../db/schema';
  * Reads are public by design (the dashboard calls them from the browser);
  * admin actions need the role 'admin'.
  */
-@path: '/odata/v4/astra'
+@path: '/odata/v4/analytics'
 @requires: 'any'
 service AstraService {
 
