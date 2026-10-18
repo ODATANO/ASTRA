@@ -5,7 +5,7 @@
 #
 # ASTRA has its own Postgres for aggregates and joins the two docker networks
 # the source Postgres containers live on, so it can read them by container name.
-# Nothing is published beyond loopback; ODATANO ACCESS (or Caddy) fronts it.
+# Nothing is published beyond loopback; a reverse proxy in front publishes it.
 name: odatano-astra
 
 services:

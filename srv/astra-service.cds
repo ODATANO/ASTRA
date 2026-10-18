@@ -2,8 +2,8 @@ using { odatano.astra as astra } from '../db/schema';
 
 /**
  * AstraService – analytics over Cardano (ODATANO) and Midnight (NIGHTGATE).
- * Read surface is public by design (dashboard on odatano.dev); when fronted by
- * ODATANO ACCESS the gateway decides who gets in. Admin actions need 'admin'.
+ * Reads are public by design (the dashboard calls them from the browser);
+ * admin actions need the role 'admin'.
  */
 @path: '/odata/v4/astra'
 @requires: 'any'

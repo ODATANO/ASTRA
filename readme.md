@@ -67,20 +67,19 @@ Reads are public (`@requires: 'any'`); the admin actions `recompute`, `runNow` a
 ## Dashboard
 
 `app/` is a static page (no framework, brand tokens from `@odatano/brand`) that CAP serves
-at `/`: headline numbers of both chains, a blocks-per-minute heartbeat, transactions, fees,
-fee distribution, transaction mix, block fill and block interval over a window (24 h, 7 d,
-30 d), token mints and burns, the Midnight ledger (DUST, shielded activity, contracts and
-circuits), Cardano stake and governance (epoch figures, certificates, withdrawals, pools and
-DReps), and the rankings. Sections of a chain the instance has no source for are left out.
-Day and night theme, every chart with a crosshair tooltip.
+on three paths. `/` compares the chains: headline numbers, key figures, a blocks-per-minute
+heartbeat, transactions, block fill and block interval of both on one axis. `/cardano` and
+`/midnight` show one chain: the same activity plus fees, fee distribution, transaction mix
+and block producers, then the chain's own sections, for Cardano tokens, addresses, stake
+and governance (epoch figures, certificates, withdrawals, pools and DReps), for Midnight
+the ledger (DUST, shielded activity, contracts and circuits). The window (24 h, 7 d, 30 d)
+scopes every chart and ranking. Sections of a chain the instance has no source for are
+left out. Day and night theme, every chart with a crosshair tooltip.
 
-The page lives next to the API pages, one host per network: `astra.preview.odatano.dev`,
-`astra.preprod.odatano.dev`, `astra.odatano.dev` (mainnet), each the reverse proxy in front
-of that network's ASTRA on `127.0.0.1:4017`. The network switch asks `/api/networks`, which
-probes the sister instances from the server (`ASTRA_NETWORKS`, default the three hosts) and
-shows an instance that does not answer as "soon". [ODATANO ACCESS](https://github.com/ODATANO/ACCESS)
-links the dashboard from its header (`ASTRA_DASHBOARD_URL`, default derived from its own
-host). `?api=<url>` points the page at another instance for local work.
+One instance serves one network. The network switch in the filter row lists the sister
+instances named in `ASTRA_NETWORKS`, probed from the server, keeps the chain path and shows
+an instance that does not answer as "soon". The "API" link opens `ASTRA_API_REFERENCE_URL`
+when set, else `$metadata`. `?api=<url>` points the page at another instance for local work.
 
 ## Local development
 
@@ -107,15 +106,11 @@ container plus its own Postgres for aggregates, joined to the source containers'
 3. `docker compose -f docker/docker-compose.yml --env-file .env up -d --build`
 4. `curl -s 127.0.0.1:4017/odata/v4/astra/SyncStatus` shows the backfill; `backfilling` turns false once caught up.
 
-Nothing is published beyond loopback. The API route is fronted by
-[ODATANO ACCESS](https://github.com/ODATANO/ACCESS) (keys and units); the dashboard gets its
-own host on the box's reverse proxy, straight to ASTRA, since its reads are public:
-
-```caddyfile
-astra.preprod.odatano.dev {
-    reverse_proxy 127.0.0.1:4017
-}
-```
+Nothing is published beyond loopback; a reverse proxy in front publishes the service or
+the dashboard. The pages read `ChainOverview`, `KeyFigures`, `SyncStatus`, `StakeEpochs`,
+the `Top*` rankings, `getSeries`, `getDistribution`, `getTop`, `getConcentration` and
+`/api/networks`; a proxy that should expose only the dashboard passes those and the pages.
+The share-image tags take the requested origin, so the pages work on any host.
 
 ## License
 

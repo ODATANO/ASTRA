@@ -1,6 +1,7 @@
 /* Browser side of the ODATANO ASTRA dashboard: reads /odata/v4/astra, draws the
    charts as inline SVG (no framework, no chart library). One instance = one network; the
-   filter row's window scopes every chart and ranking below it. */
+   path picks the chain (/cardano, /midnight; / compares both) and the filter row's window
+   scopes every chart and ranking below it. */
 (function () {
   'use strict';
   const CFG = window.ASTRA_CONFIG || {};
@@ -11,12 +12,49 @@
   const COLOR = { cardano: 'var(--series-cardano)', midnight: 'var(--series-midnight)', mute: 'var(--series-mute)' };
   const SLOT = ['var(--series-1)', 'var(--series-2)', 'var(--series-3)', 'var(--series-4)', 'var(--series-5)'];
   const $ = (id) => document.getElementById(id);
-  const NS = 'http://www.w3.org/2000/svg';
+  const { fmtNum, fmtInt, fmtPct, pad, utc, MON, fmtAxisTime, fmtFullTime, fmtWhen, ago, short, el, svg, clear, emptyState, errorState, stat, showTip, hideTip, niceTicks, chartCard, draw, boardTable, ro } = window.AstraCharts;
 
   // ── state ─────────────────────────────────────────────────
   // `gen` counts window changes; an answer requested under an older one is dropped, never drawn.
-  const state = { window: '7d', network: null, overview: {}, cache: new Map(), timer: null, loading: false, gen: 0 };
+  const state = { window: '7d', network: null, overview: {}, loaded: false, cache: new Map(), timer: null, loading: false, gen: 0 };
   try { const w = localStorage.getItem('astra.window'); if (['24h', '7d', '30d'].includes(w)) state.window = w; } catch { /* private mode */ }
+
+  // ── view ──────────────────────────────────────────────────
+  const PAGE = CHAINS.find((c) => location.pathname.replace(/\/+$/, '') === `/${c}`) || null;
+  const inView = (chain) => !PAGE || PAGE === chain;
+  const ACTIVE = CHAINS.filter(inView);
+  const pageHref = (chain) => (chain ? `/${chain}` : '/') + location.search;
+  const has = (chain) => !!state.overview[chain];
+  const shown = (chain) => has(chain) && inView(chain);
+  const visible = (e) => !!e && !e.hidden && !e.closest('[hidden]');
+  /**
+   * What the page shows. data-view: `all` only at /, `chain` only on a chain page, or one
+   * chain's name. data-chain, data-kf and marked cards need their chain in view and, once
+   * the overview answered, a source for it; data-ov (overview card, hero fact) only the view.
+   */
+  function applyVisibility() {
+    const byView = (v) => (v === 'all' ? !PAGE : v === 'chain' ? !!PAGE : v === PAGE);
+    document.querySelectorAll('[data-view], [data-chain], [data-kf], [data-ov], .card[data-mark]').forEach((e) => {
+      const d = e.dataset, chain = d.chain || d.kf || d.ov || d.mark;
+      const chainOk = !chain || (inView(chain) && (d.ov != null || !state.loaded || has(chain)));
+      e.hidden = !((d.view ? byView(d.view) : true) && chainOk);
+    });
+    document.querySelectorAll('[data-page]').forEach((a) => { a.href = pageHref(a.dataset.page); });
+    document.querySelectorAll('[data-nav]').forEach((a) => { a.href = pageHref(a.dataset.nav); a.hidden = state.loaded && !has(a.dataset.nav); a.classList.toggle('on', a.dataset.nav === PAGE); });
+    // a grid keeps its two columns only while two cards show; an emptied grid leaves no gap
+    document.querySelectorAll('.grid').forEach((g) => { const n = [...g.children].filter((c) => !c.hidden).length; g.classList.toggle('one', n === 1); g.hidden = n === 0; });
+    document.title = PAGE ? `ODATANO ASTRA · ${CHAIN_NAME[PAGE]}` : 'ODATANO ASTRA';
+    renderChainSwitch();
+  }
+  function renderChainSwitch() {
+    const sw = $('chainSwitch');
+    clear(sw);
+    for (const [id, label] of [[null, 'compare'], ...CHAINS.map((c) => [c, c])]) {
+      if (id && state.loaded && !has(id)) continue;
+      if (id === PAGE) sw.appendChild(el('span', 'on', label));
+      else { const a = el('a', null, label); a.href = pageHref(id); sw.appendChild(a); }
+    }
+  }
 
   // ── fetch ─────────────────────────────────────────────────
   const url = (path) => API + path;
@@ -43,18 +81,6 @@
 
   // ── formatting ────────────────────────────────────────────
   const isMainnet = () => state.network === 'mainnet';
-  function fmtNum(n, d) {
-    if (n == null || isNaN(n)) return '–';
-    const a = Math.abs(n);
-    const trim = (s) => s.replace(/\.0+$/, '');
-    if (a >= 1e9) return trim((n / 1e9).toFixed(1)) + 'B';
-    if (a >= 1e6) return trim((n / 1e6).toFixed(1)) + 'M';
-    if (a >= 1e4) return trim((n / 1e3).toFixed(1)) + 'K';
-    if (Number.isInteger(n)) return n.toLocaleString('en-US');
-    return n.toLocaleString('en-US', { maximumFractionDigits: d == null ? 2 : d });
-  }
-  const fmtInt = (n) => (n == null || isNaN(n) ? '–' : Number(n).toLocaleString('en-US'));
-  const fmtPct = (x, signed) => (x == null || isNaN(x) ? '–' : `${signed && x > 0 ? '+' : ''}${Number(x).toLocaleString('en-US', { maximumFractionDigits: Math.abs(x) < 1 ? 2 : 1 })}%`);
   // Money comes in atoms: lovelace (1e6 per ADA) and specks (1e15 per DUST). A scale is the
   // divisor and label to show a value in; for DUST it steps down (mDUST, µDUST, ...) until the
   // reference value is at least 1, because a fee of 1e8 specks is 0.0000001 DUST.
@@ -72,188 +98,9 @@
   const feeValue = (v, unit, scale) => (v == null ? null : Number(v) / (scale || moneyScale(unit, v)).div);
   const feeUnit = (unit, scale) => (scale || moneyScale(unit, 0)).label;
   const fmtFee = (v, unit, scale) => { if (v == null) return '–'; const s = scale || moneyScale(unit, v); return `${fmtNum(Number(v) / s.div, s.digits)} ${s.label}`; };
-  const pad = (n) => String(n).padStart(2, '0');
-  const utc = (iso) => { const d = new Date(iso); return { y: d.getUTCFullYear(), m: d.getUTCMonth(), d: d.getUTCDate(), h: d.getUTCHours(), mi: d.getUTCMinutes() }; };
-  const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-  const fmtAxisTime = (iso, gran) => { const t = utc(iso); return gran === 'day' ? `${t.d} ${MON[t.m]}` : `${pad(t.h)}:${pad(t.mi)}`; };
-  const fmtFullTime = (iso, gran) => { const t = utc(iso); return gran === 'day' ? `${t.y}-${pad(t.m + 1)}-${pad(t.d)}` : `${t.y}-${pad(t.m + 1)}-${pad(t.d)} ${pad(t.h)}:${pad(t.mi)} UTC`; };
-  const fmtWhen = (iso) => (iso ? new Date(iso).toISOString().slice(0, 16).replace('T', ' ') + ' UTC' : '–');
-  const ago = (iso) => { if (!iso) return '–'; const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000); if (s < 90) return `${Math.round(s)} s ago`; if (s < 5400) return `${Math.round(s / 60)} min ago`; if (s < 172800) return `${(s / 3600).toFixed(1)} h ago`; return `${Math.round(s / 86400)} d ago`; };
-  const short = (v, head, tail) => (v && v.length > (head || 12) + (tail || 6) + 1 ? `${v.slice(0, head || 12)}…${v.slice(-(tail || 6))}` : v || '');
   const granOf = (w) => (w === '1h' ? 'minute' : w === '24h' ? 'hour' : 'day');
   const perOf = (w) => (w === '1h' ? 'per minute' : w === '24h' ? 'per hour' : 'per day');
 
-  // ── DOM helpers ───────────────────────────────────────────
-  const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
-  const svg = (tag, attrs, style) => { const e = document.createElementNS(NS, tag); for (const k in attrs || {}) e.setAttribute(k, attrs[k]); for (const k in style || {}) e.style[k] = style[k]; return e; };
-  const clear = (node) => { while (node.firstChild) node.removeChild(node.firstChild); return node; };
-  function emptyState(container, text) { clear(container).appendChild(el('div', 'empty', text)); }
-  function errorState(container, err) { clear(container).appendChild(el('div', 'empty', `Could not load: ${err && err.message ? err.message : err}`)); }
-  function stat(label, value, unit, hint, delta) {
-    const s = el('div', 'stat');
-    s.appendChild(el('div', 'label', label));
-    const v = el('div', 'value', value);
-    if (unit) v.appendChild(el('small', null, unit));
-    s.appendChild(v);
-    // the third line is always there (empty if there is nothing to say), so every tile has the
-    // same height and the Cardano and Midnight grids line up
-    if (delta != null && !isNaN(delta)) {
-      const d = el('div', 'delta ' + (delta > 0 ? 'up' : delta < 0 ? 'down' : ''), `${delta > 0 ? '▲' : delta < 0 ? '▼' : '•'} ${fmtPct(Math.abs(delta))} ${hint || ''}`);
-      s.appendChild(d);
-    } else s.appendChild(el('div', 'hint', hint || ''));
-    return s;
-  }
-
-  // ── tooltip ───────────────────────────────────────────────
-  const tip = $('tip');
-  function showTip(x, y, title, rows) {
-    clear(tip);
-    tip.appendChild(el('div', 't', title));
-    for (const r of rows) {
-      const row = el('div', 'r');
-      const name = el('span');
-      const key = el('i'); key.style.background = r.color || 'transparent'; if (!r.color) key.style.visibility = 'hidden';
-      name.appendChild(key); name.appendChild(document.createTextNode(r.name));
-      row.appendChild(el('b', null, r.value)); row.appendChild(name);
-      tip.appendChild(row);
-    }
-    tip.hidden = false;
-    const w = tip.offsetWidth, h = tip.offsetHeight;
-    let left = x + 14, top = y + 14;
-    if (left + w > window.innerWidth - 8) left = x - w - 14;
-    if (top + h > window.innerHeight - 8) top = y - h - 14;
-    tip.style.left = `${Math.max(4, left)}px`; tip.style.top = `${Math.max(4, top)}px`;
-  }
-  const hideTip = () => { tip.hidden = true; };
-
-  // ── charts ────────────────────────────────────────────────
-  function niceTicks(max, n) {
-    if (!(max > 0)) return [0, 1];
-    const raw = max / (n || 4);
-    const p = Math.pow(10, Math.floor(Math.log10(raw)));
-    const f = raw / p;
-    const step = (f <= 1 ? 1 : f <= 2 ? 2 : f <= 2.5 ? 2.5 : f <= 5 ? 5 : 10) * p;
-    const ticks = [];
-    for (let v = 0; v <= max + step * 1e-9; v += step) ticks.push(+v.toFixed(10));
-    if (ticks[ticks.length - 1] < max) ticks.push(+(ticks[ticks.length - 1] + step).toFixed(10));
-    return ticks;
-  }
-  const specs = new WeakMap();
-  function chartCard(card) {
-    let plot = card.querySelector('.plot');
-    if (!plot) { plot = el('div', 'plot'); card.appendChild(plot); }
-    return plot;
-  }
-  /** spec: { kind: 'line'|'bar'|'hist', x: [iso|label], gran, series: [{ name, color, values: [], dash? }], fmt(v), unit } */
-  function draw(card, spec) {
-    specs.set(card, spec);
-    const plot = chartCard(card);
-    clear(plot);
-    const hasData = spec.series.some((s) => s.values.some((v) => v != null));
-    if (!spec.x.length || !hasData) { emptyState(plot, spec.empty || 'No data for this window yet.'); card.querySelector('.legend')?.remove(); return; }
-    const W = Math.max(280, plot.clientWidth || card.clientWidth - 52 || 520);
-    const H = spec.kind === 'hist' ? 200 : 220;
-    const M = { t: 12, r: spec.kind === 'line' ? 56 : 12, b: 26, l: 44 };
-    const iw = W - M.l - M.r, ih = H - M.t - M.b;
-    const root = svg('svg', { viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: 'img' });
-    root.setAttribute('aria-label', [card.dataset.mark && CHAIN_NAME[card.dataset.mark], card.querySelector('h3')?.textContent || 'chart'].filter(Boolean).join(': '));
-    const all = spec.series.flatMap((s) => s.values.filter((v) => v != null));
-    const maxV = Math.max(0, ...all), minV = Math.min(0, ...all);
-    // the axis reaches below 0 only for values that do (a difference, not a count)
-    const hi = spec.yMax || maxV;
-    const base = niceTicks(hi - minV, 4), step = base[1] - base[0];
-    const ticks = [];
-    for (let v = Math.floor(minV / step) * step; ; v += step) { ticks.push(+v.toFixed(10)); if (v >= hi - step * 1e-9) break; }
-    if (ticks.length < 2) ticks.push(+(ticks[0] + step).toFixed(10));
-    const yMin = ticks[0], yMax = ticks[ticks.length - 1];
-    const y = (v) => M.t + ih - ((v - yMin) / (yMax - yMin)) * ih;
-    const n = spec.x.length;
-    const slot = iw / Math.max(1, spec.kind === 'line' ? n - 1 : n);
-    const xc = (i) => (spec.kind === 'line' ? (n === 1 ? M.l + iw / 2 : M.l + i * slot) : M.l + i * slot + slot / 2);
-    // grid + y labels
-    for (const t of ticks) {
-      root.appendChild(svg('line', { x1: M.l, x2: W - M.r, y1: y(t), y2: y(t), class: t === 0 ? 'axis-line' : 'grid-line' }));
-      root.appendChild(svg('text', { x: M.l - 6, y: y(t) + 4, 'text-anchor': 'end' })).textContent = spec.fmtAxis ? spec.fmtAxis(t) : fmtNum(t);
-    }
-    // x labels: about six, never two in the same slot
-    const every = Math.max(1, Math.ceil(n / (W < 480 ? 4 : 6)));
-    for (let i = 0; i < n; i += every) {
-      const t = svg('text', { x: xc(i), y: H - 8, 'text-anchor': i === 0 && spec.kind === 'line' ? 'start' : i === n - 1 && spec.kind === 'line' ? 'end' : 'middle' });
-      t.textContent = spec.xLabel ? spec.xLabel(i) : fmtAxisTime(spec.x[i], spec.gran);
-      root.appendChild(t);
-    }
-    const marks = [];
-    if (spec.kind === 'line') {
-      spec.series.forEach((s, si) => {
-        if (spec.series.length === 1 && spec.area !== false) {
-          let d = '';
-          s.values.forEach((v, i) => { if (v != null) d += (d ? ' L' : 'M') + `${xc(i)} ${y(v)}`; });
-          if (d) root.appendChild(svg('path', { d: `${d} L${xc(n - 1)} ${y(0)} L${xc(0)} ${y(0)} Z`, class: 'area' }, { fill: s.color }));
-        }
-        let d = '', open = false;
-        s.values.forEach((v, i) => { if (v == null) { open = false; return; } d += (open ? ' L' : ' M') + `${xc(i)} ${y(v)}`; open = true; });
-        root.appendChild(svg('path', { d: d.trim(), class: 'line', ...(s.dash ? { 'stroke-dasharray': '5 4' } : {}) }, { stroke: s.color }));
-        let last = -1; for (let i = n - 1; i >= 0; i--) if (s.values[i] != null) { last = i; break; }
-        if (last >= 0) {
-          root.appendChild(svg('circle', { cx: xc(last), cy: y(s.values[last]), r: 4, class: 'dot' }, { fill: s.color }));
-          marks.push({ y: y(s.values[last]), text: (spec.fmt || fmtNum)(s.values[last]), x: xc(last) + 8 });
-        }
-      });
-      // end labels, dropped where they would collide
-      marks.sort((a, b) => a.y - b.y);
-      let lastY = -99;
-      for (const m of marks) { if (m.y - lastY < 12) continue; lastY = m.y; const t = svg('text', { x: m.x, y: m.y + 4, class: 'end' }); t.textContent = m.text; root.appendChild(t); }
-    } else {
-      const k = spec.series.length;
-      const gap = 2, band = Math.min(24 * k + gap * (k - 1), slot * 0.72);
-      const bw = (band - gap * (k - 1)) / k;
-      for (let i = 0; i < n; i++) {
-        const x0 = xc(i) - band / 2;
-        spec.series.forEach((s, si) => {
-          const v = s.values[i];
-          if (v == null) return;
-          const h = Math.max(0, y(0) - y(v));
-          const r = Math.min(4, bw / 2, h);
-          const x = x0 + si * (bw + gap), top = y(v);
-          // rounded data-end, square baseline
-          const d = h <= 0 ? '' : `M${x} ${y(0)} V${top + r} a${r} ${r} 0 0 1 ${r} -${r} H${x + bw - r} a${r} ${r} 0 0 1 ${r} ${r} V${y(0)} Z`;
-          if (d) root.appendChild(svg('path', { d, class: 'bar', 'data-i': i }, { fill: s.color }));
-        });
-      }
-    }
-    // crosshair + tooltip: the nearest x wins, every series reads out
-    const cross = svg('line', { x1: 0, x2: 0, y1: M.t, y2: M.t + ih, class: 'cross' }, { display: 'none' });
-    root.appendChild(cross);
-    const hit = svg('rect', { x: M.l - slot / 2, y: 0, width: iw + slot, height: H, class: 'hit-cross' });
-    root.appendChild(hit);
-    const focusDots = [];
-    const at = (ev) => {
-      const r = root.getBoundingClientRect();
-      const px = ((ev.clientX - r.left) / r.width) * W;
-      let best = 0, bd = Infinity;
-      for (let i = 0; i < n; i++) { const d = Math.abs(xc(i) - px); if (d < bd) { bd = d; best = i; } }
-      return best;
-    };
-    hit.addEventListener('pointermove', (ev) => {
-      const i = at(ev);
-      cross.setAttribute('x1', xc(i)); cross.setAttribute('x2', xc(i)); cross.style.display = '';
-      root.querySelectorAll('.bar.hover').forEach((b) => b.classList.remove('hover'));
-      root.querySelectorAll(`.bar[data-i="${i}"]`).forEach((b) => b.classList.add('hover'));
-      focusDots.forEach((d) => d.remove()); focusDots.length = 0;
-      if (spec.kind === 'line') spec.series.forEach((s) => { if (s.values[i] != null) { const d = svg('circle', { cx: xc(i), cy: y(s.values[i]), r: 4, class: 'dot' }, { fill: s.color }); root.insertBefore(d, hit); focusDots.push(d); } });
-      const title = spec.xTitle ? spec.xTitle(i) : fmtFullTime(spec.x[i], spec.gran);
-      showTip(ev.clientX, ev.clientY, title, spec.series.map((s) => ({ name: s.name, color: s.color, value: s.values[i] == null ? '–' : (s.fmt || spec.fmt || fmtNum)(s.values[i]) })));
-    });
-    hit.addEventListener('pointerleave', () => { cross.style.display = 'none'; hideTip(); focusDots.forEach((d) => d.remove()); focusDots.length = 0; root.querySelectorAll('.bar.hover').forEach((b) => b.classList.remove('hover')); });
-    plot.appendChild(root);
-    // legend for two or more series (the title names a single one)
-    card.querySelector('.legend')?.remove();
-    if (spec.series.length > 1) {
-      const lg = el('div', 'legend');
-      for (const s of spec.series) { const it = el('span'); const key = el('i', spec.kind === 'bar' ? 'rect' : s.dash ? 'dash' : ''); key.style.background = s.color; it.appendChild(key); it.appendChild(document.createTextNode(s.name)); lg.appendChild(it); }
-      plot.after(lg);
-    }
-  }
   /** Histogram: one bar per log-scale fee band, hover reads the band. */
   function drawHist(card, dist, unit) {
     const bins = (dist && dist.bins) || [];
@@ -268,9 +115,6 @@
       empty: 'No fees in this window yet.',
     });
   }
-  // redraw charts whose width changed (the cards are responsive)
-  const ro = new ResizeObserver((entries) => { for (const e of entries) { const card = e.target; const s = specs.get(card); if (s) draw(card, s); } });
-  document.querySelectorAll('.card.chart').forEach((c) => ro.observe(c));
 
   // ── network switch, badge, hero ───────────────────────────
   function renderNetwork(overview) {
@@ -281,12 +125,16 @@
     badge.classList.toggle('off', !nets.length);
     badge.classList.toggle('warn', overview.some((o) => o.backfilling));
     $('factNetwork').textContent = state.network ? `${state.network} network` : 'no network yet';
-    renderSwitch(CFG.networks || []);
-    // The server probes the sister instances (one ASTRA per network) and says which are up;
-    // a network that is not reachable stays a label, not a dead link. Falls back to the static list.
+    renderSwitch(state.network ? [{ id: state.network }] : []);
+    // The server probes the sister instances and says which are up; a network that is not
+    // reachable stays a label, not a dead link. It also names the readable API reference, if any.
     fetch(new URL('/api/networks', new URL(API, location.href)).href, { headers: { accept: 'application/json' } })
       .then((r) => (r.ok ? r.json() : null))
-      .then((rep) => { if (rep && Array.isArray(rep.networks)) renderSwitch(rep.networks.map((n) => ({ id: n.id, url: n.up ? n.url : '' }))); })
+      .then((rep) => {
+        if (!rep) return;
+        if (Array.isArray(rep.networks) && rep.networks.length) renderSwitch(rep.networks.map((n) => ({ id: n.id, url: n.up ? n.url : '' })));
+        if (rep.apiReference) $('apiLink').href = rep.apiReference;
+      })
       .catch(() => {});
   }
   function renderSwitch(networks) {
@@ -294,7 +142,7 @@
     clear(sw);
     for (const n of networks) {
       if (n.id === state.network) sw.appendChild(el('span', 'on', n.id));
-      else if (n.url) { const a = el('a', null, n.id); a.href = n.url; sw.appendChild(a); }
+      else if (n.url) { const a = el('a', null, n.id); a.href = n.url + (PAGE ? `/${PAGE}` : '/'); sw.appendChild(a); }
       else { const s = el('span', 'soon', n.id); s.appendChild(el('i', null, 'soon')); sw.appendChild(s); }
     }
   }
@@ -306,6 +154,7 @@
     try {
       const { value } = await api('/ChainOverview');
       renderNetwork(value);
+      state.loaded = true;
       for (const chain of CHAINS) {
         const o = value.find((r) => r.chain === chain);
         const card = cards[chain];
@@ -345,25 +194,20 @@
         $('fact' + CHAIN_NAME[chain]).textContent = `${CHAIN_NAME[chain]} at ${fmtInt(o.sourceTipHeight)}`;
         $('fact' + CHAIN_NAME[chain]).className = chain;
       }
-      applyChains();
+      applyVisibility();
     } catch (err) {
       Object.values(cards).forEach((c) => errorState(c.querySelector('[data-stats]'), err));
       $('netBadge').textContent = 'offline'; $('netBadge').classList.add('off');
     } finally { Object.values(cards).forEach((c) => c.classList.remove('loading')); }
   }
 
-  // Sections and cards of one chain (data-chain) disappear when the instance has no source for it.
-  const has = (chain) => !!state.overview[chain];
-  function applyChains() {
-    document.querySelectorAll('[data-chain]').forEach((e) => { e.hidden = !has(e.dataset.chain); });
-    document.querySelectorAll('[data-nav]').forEach((a) => { a.hidden = !!$(a.dataset.nav)?.hidden; });
-  }
   const setSubs = (root, W) => root.querySelectorAll('[data-sub]').forEach((e) => { e.textContent = perOf(W); });
 
   // ── Heartbeat ─────────────────────────────────────────────
   async function loadHeartbeat() {
-    for (const chain of CHAINS) {
+    for (const chain of ACTIVE) {
       const card = document.querySelector(`[data-chart="hb${CHAIN_NAME[chain]}"]`);
+      if (!visible(card)) continue;
       card.classList.add('loading');
       try {
         const s = await series(chain, 'blocks.count', '1h');
@@ -420,26 +264,24 @@
   async function loadActivity() {
     const W = state.window, gran = granOf(W);
     setSubs(document.querySelector('main'), W);
-    const cards = ACTIVITY.map((n) => document.querySelector(`[data-chart="${n}"]`)).filter(Boolean);
+    const cards = ACTIVITY.map((n) => document.querySelector(`[data-chart="${n}"]`)).filter(visible);
     cards.forEach((c) => c.classList.add('loading'));
     const jobs = [];
-    // transactions, both chains on one axis
+    // transactions, the chains in view on one axis
     jobs.push((async () => {
       const card = document.querySelector('[data-chart="tx"]');
       try {
-        const [c, m] = await Promise.all(CHAINS.map((ch) => series(ch, 'tx.count', W).catch(() => null)));
-        const x = unionX(pts(c), pts(m));
-        draw(card, { kind: 'bar', gran, x, unit: 'tx', fmt: fmtInt, series: [
-          { name: 'Cardano', color: COLOR.cardano, values: alignOn(x, pts(c), (p) => Number(p.sum)) },
-          { name: 'Midnight', color: COLOR.midnight, values: alignOn(x, pts(m), (p) => Number(p.sum)) },
-        ] });
+        const r = await Promise.all(ACTIVE.map((ch) => series(ch, 'tx.count', W).catch(() => null)));
+        const x = unionX(...r.map(pts));
+        draw(card, { kind: 'bar', gran, x, unit: 'tx', fmt: fmtInt, series: ACTIVE.map((ch, i) => ({ name: CHAIN_NAME[ch], color: COLOR[ch], values: alignOn(x, pts(r[i]), (p) => Number(p.sum)) })) });
       } catch (err) { errorState(chartCard(card), err); }
     })());
-    for (const chain of CHAINS) {
+    for (const chain of ACTIVE) {
       const N = CHAIN_NAME[chain];
       // fees: median in the chain hue, p95 as context
       jobs.push((async () => {
         const card = document.querySelector(`[data-chart="fees${N}"]`);
+        if (!visible(card)) return;
         try {
           const s = await series(chain, 'fees.paid', W);
           const unit = s.unit, x = pts(s).map((p) => p.bucketStart);
@@ -455,6 +297,7 @@
       // fee distribution
       jobs.push((async () => {
         const card = document.querySelector(`[data-chart="dist${N}"]`);
+        if (!visible(card)) return;
         const path = `/getDistribution(chain='${chain}',metric='fees.paid',window='${W}')`;
         try { const d = await api(path); drawHist(card, d, d.unit); }
         catch (err) { errorState(chartCard(card), err); }
@@ -462,6 +305,7 @@
       // transaction mix as shares of all transactions
       jobs.push((async () => {
         const card = document.querySelector(`[data-chart="mix${N}"]`);
+        if (!visible(card)) return;
         const parts = chain === 'cardano'
           ? [['tx.withAssets', 'with native assets'], ['tx.withMetadata', 'with metadata']]
           : [['tx.contractCalls', 'contract calls'], ['tx.contractDeploys', 'contract deploys'], ['tx.zswap', 'shielded (decoded)'], ['tx.failed', 'failed']];
@@ -476,38 +320,38 @@
         } catch (err) { errorState(chartCard(card), err); }
       })());
     }
-    // empty blocks share and transactions per block, both chains
+    // empty blocks share and transactions per block, the chains in view
     jobs.push((async () => {
       const card = document.querySelector('[data-chart="empty"]');
       try {
-        const r = await Promise.all(CHAINS.map((ch) => Promise.all([series(ch, 'blocks.count', W), series(ch, 'blocks.empty', W)]).catch(() => null)));
+        const r = await Promise.all(ACTIVE.map((ch) => Promise.all([series(ch, 'blocks.count', W), series(ch, 'blocks.empty', W)]).catch(() => null)));
         const x = unionX(...r.map((p) => (p ? pts(p[0]) : [])));
         const shares = r.map((p) => { if (!p) return x.map(() => null); const tot = new Map(pts(p[0]).map((q) => [q.bucketStart, Number(q.sum)])); return alignOn(x, pts(p[1]), (q) => Number(q.sum)).map((v, i) => (tot.get(x[i]) ? ((v ?? 0) / tot.get(x[i])) * 100 : null)); });
-        draw(card, { kind: 'line', gran, x, unit: '%', fmt: (v) => fmtPct(v), fmtAxis: (v) => `${fmtNum(v)}%`, area: false, series: CHAINS.map((ch, i) => ({ name: CHAIN_NAME[ch], color: COLOR[ch], values: shares[i] })) });
+        draw(card, { kind: 'line', gran, x, unit: '%', fmt: (v) => fmtPct(v), fmtAxis: (v) => `${fmtNum(v)}%`, area: false, series: ACTIVE.map((ch, i) => ({ name: CHAIN_NAME[ch], color: COLOR[ch], values: shares[i] })) });
       } catch (err) { errorState(chartCard(card), err); }
     })());
     jobs.push((async () => {
       const card = document.querySelector('[data-chart="txPerBlock"]');
       try {
-        const r = await Promise.all(CHAINS.map((ch) => series(ch, 'blocks.txCount', W).catch(() => null)));
+        const r = await Promise.all(ACTIVE.map((ch) => series(ch, 'blocks.txCount', W).catch(() => null)));
         const x = unionX(...r.map((s) => pts(s)));
-        draw(card, { kind: 'line', gran, x, unit: 'tx', fmt: (v) => fmtNum(v, 2), area: false, series: CHAINS.map((ch, i) => ({ name: CHAIN_NAME[ch], color: COLOR[ch], values: alignOn(x, pts(r[i]), (p) => (p.avg == null ? null : Number(p.avg))) })) });
+        draw(card, { kind: 'line', gran, x, unit: 'tx', fmt: (v) => fmtNum(v, 2), area: false, series: ACTIVE.map((ch, i) => ({ name: CHAIN_NAME[ch], color: COLOR[ch], values: alignOn(x, pts(r[i]), (p) => (p.avg == null ? null : Number(p.avg))) })) });
       } catch (err) { errorState(chartCard(card), err); }
     })());
     // block interval: median solid, p95 dashed, per chain
     jobs.push((async () => {
       const card = document.querySelector('[data-chart="interval"]');
       try {
-        const r = await Promise.all(CHAINS.map((ch) => (has(ch) ? series(ch, 'blocks.interval', W).catch(() => null) : null)));
+        const r = await Promise.all(ACTIVE.map((ch) => (has(ch) ? series(ch, 'blocks.interval', W).catch(() => null) : null)));
         const x = unionX(...r.map((s) => pts(s)));
         const pick = (i, k) => alignOn(x, pts(r[i]), (p) => (p[k] == null ? null : Number(p[k])));
-        draw(card, { kind: 'line', gran, x, unit: 's', fmt: (v) => `${fmtNum(v, 1)} s`, area: false, series: CHAINS.flatMap((ch, i) => (r[i] ? [
+        draw(card, { kind: 'line', gran, x, unit: 's', fmt: (v) => `${fmtNum(v, 1)} s`, area: false, series: ACTIVE.flatMap((ch, i) => (r[i] ? [
           { name: `${CHAIN_NAME[ch]} median`, color: COLOR[ch], values: pick(i, 'p50') },
           { name: `${CHAIN_NAME[ch]} p95`, color: COLOR[ch], dash: true, values: pick(i, 'p95') },
         ] : [])) });
       } catch (err) { errorState(chartCard(card), err); }
     })());
-    if (has('midnight')) jobs.push((async () => {
+    if (shown('midnight')) jobs.push((async () => {
       const card = document.querySelector('[data-chart="feeErrMidnight"]');
       try {
         const s = await series('midnight', 'fees.estimateError', W);
@@ -519,17 +363,17 @@
         ], empty: 'No fees in this window yet.' });
       } catch (err) { errorState(chartCard(card), err); }
     })());
-    const job = (name, fn) => jobs.push((async () => { const card = document.querySelector(`[data-chart="${name}"]`); if (!card) return; try { await fn(card); } catch (err) { errorState(chartCard(card), err); } })());
-    if (has('cardano')) {
+    const job = (name, fn) => jobs.push((async () => { const card = document.querySelector(`[data-chart="${name}"]`); if (!visible(card)) return; try { await fn(card); } catch (err) { errorState(chartCard(card), err); } })());
+    if (shown('cardano')) {
       job('tokenTransfers', (card) => sumChart(card, 'cardano', 'blocks.count', [['tokens.transfers', 'transfers']], { kind: 'bar', unit: 'moves', empty: 'No token transfers in this window yet.' }));
       job('utxoFlow', (card) => sumChart(card, 'cardano', 'blocks.count', [['utxo.created', 'created'], ['utxo.spent', 'spent']], { unit: 'utxo' }));
       job('blockSize', (card) => sizeChart(card, 'cardano', 'blocks.size'));
     }
-    if (has('midnight')) {
+    if (shown('midnight')) {
       job('contractTx', (card) => sumChart(card, 'midnight', 'blocks.count', [['tx.contractCalls', 'calls'], ['tx.contractDeploys', 'deploys']], { unit: 'tx', empty: 'No contract transactions in this window yet.' }));
       job('txSize', (card) => sizeChart(card, 'midnight', 'tx.size'));
     }
-    if (has('cardano')) {
+    if (shown('cardano')) {
       jobs.push((async () => {
         const card = document.querySelector('[data-chart="supply"]');
         try { await sumChart(card, 'cardano', 'blocks.count', [['tokens.mints', 'mints'], ['tokens.burns', 'burns']], { unit: 'tx', empty: 'No mints or burns in this window yet.' }); }
@@ -553,9 +397,10 @@
   };
   async function loadKeyFigures() {
     const W = state.window;
-    const cards = [...document.querySelectorAll('[data-kf]')];
+    const cards = [...document.querySelectorAll('[data-kf]')].filter(visible);
+    if (!cards.length) return;
     cards.forEach((c) => c.classList.add('loading'));
-    const metrics = [...new Set(Object.values(KEY_FIGURES).flat().map(([m]) => m))];
+    const metrics = [...new Set(cards.flatMap((c) => KEY_FIGURES[c.dataset.kf] || []).map(([m]) => m))];
     try {
       const { value } = await api(filter('KeyFigures', `window eq '${W}' and (${metrics.map((m) => `metric eq '${m}'`).join(' or ')})`));
       for (const card of cards) {
@@ -576,7 +421,7 @@
 
   // ── Ledger (Midnight, decoded from the ledger payload) ───
   async function loadLedger() {
-    if (!has('midnight')) return;
+    if (!shown('midnight')) return;
     const W = state.window, root = $('ledger');
     setSubs(root, W);
     const cards = [...root.querySelectorAll('.card')];
@@ -630,7 +475,7 @@
 
   // ── Stake & Governance (Cardano) ─────────────────────────
   async function loadStake() {
-    if (!has('cardano')) return;
+    if (!shown('cardano')) return;
     const W = state.window, root = $('stake');
     setSubs(root, W);
     const cards = [...root.querySelectorAll('.card')];
@@ -713,38 +558,15 @@
 
   // ── Rankings ──────────────────────────────────────────────
 
-  function boardTable(container, rows, cols) {
-    if (!rows.length) return false;
-    const table = el('table', 'compact');
-    const thead = el('thead'), tr = el('tr');
-    tr.appendChild(el('th', null, '#'));
-    for (const c of cols) tr.appendChild(el('th', c.num ? 'num' : '', c.head));
-    thead.appendChild(tr); table.appendChild(thead);
-    const tbody = el('tbody');
-    const top = Math.max(...rows.map((r) => Number(cols.find((c) => c.bar) ? r[cols.find((c) => c.bar).key] : 0) || 0));
-    for (const r of rows) {
-      const row = el('tr');
-      row.appendChild(el('td', 'rank', String(r.rank)));
-      for (const c of cols) {
-        const td = el('td', c.num ? 'num' : c.id ? 'id' : '', c.fmt ? c.fmt(r[c.key], r) : String(r[c.key] ?? '–'));
-        if (c.id) td.title = String(r[c.key] ?? '');
-        if (c.bar && top > 0) { const b = el('span', 'inbar'); b.style.width = `${Math.max(2, (Number(r[c.key]) / top) * 100)}%`; td.appendChild(b); }
-        row.appendChild(td);
-      }
-      tbody.appendChild(row);
-    }
-    table.appendChild(tbody);
-    clear(container).appendChild(table);
-    return true;
-  }
   async function loadRankings() {
     const W = state.window;
-    const boards = [...document.querySelectorAll('[data-board]')];
+    const boards = [...document.querySelectorAll('[data-board]')].filter(visible);
     boards.forEach((b) => b.classList.add('loading'));
     const jobs = [];
-    for (const chain of CHAINS) {
+    for (const chain of ACTIVE) {
       jobs.push((async () => {
         const card = document.querySelector(`[data-board="producers${CHAIN_NAME[chain]}"]`);
+        if (!visible(card)) return;
         const tbl = card.querySelector('[data-table]'), conc = card.querySelector('[data-conc]');
         const listPath = filter('TopBlockProducers', `chain eq '${chain}' and window eq '${W}' and rank le 10`);
         const concPath = `/getConcentration(chain='${chain}',dimension='producer',metric='blocks.produced',window='${W}',by='count',subject='')`;
@@ -775,6 +597,7 @@
     for (const [name, path, cols, empty] of simple) {
       jobs.push((async () => {
         const card = document.querySelector(`[data-board="${name}"]`);
+        if (!visible(card)) return;
         const tbl = card.querySelector('[data-table]');
         try { const { value } = await api(path); if (!boardTable(tbl, value, cols)) emptyState(tbl, empty); }
         catch (err) { errorState(tbl, err); }
@@ -811,12 +634,12 @@
   }
   document.querySelectorAll('#windowSeg button').forEach((b) => { b.classList.toggle('on', b.dataset.window === state.window); b.addEventListener('click', () => setWindow(b.dataset.window)); });
   $('refresh').addEventListener('click', () => loadAll());
-  $('heroBase').textContent = new URL(API, location.href).href;
-  // "API" leads to the readable reference on the network's API pages (astra.<net> -> api.<net>,
-  // the ASTRA section); $metadata is the fallback for a host without that twin (local work).
-  $('apiLink').href = /^astra\./.test(location.hostname) ? `https://api.${location.hostname.slice(6)}/reference#AstraService` : url('/$metadata');
+  // "API" opens $metadata until /api/networks names a readable reference (ASTRA_API_REFERENCE_URL).
+  $('apiLink').href = url('/$metadata');
   const schedule = () => { clearInterval(state.timer); state.timer = setInterval(() => { if (!document.hidden) loadAll(true); }, CFG.refreshMs || 60000); };
   document.addEventListener('visibilitychange', () => { if (!document.hidden) loadAll(true); });
+
+  applyVisibility();
 
   // ── chrome: theme, burger, pointer glow (same as the API pages) ─
   const themeBtn = $('theme');
@@ -856,7 +679,7 @@
     try { localStorage.setItem(FOLD_KEY, JSON.stringify(folded)); } catch { /* private mode */ }
   };
   document.querySelectorAll('main > .section[id]').forEach((section) => {
-    const h2 = section.querySelector('.section-head h2');
+    const h2 = section.querySelector('.section-head h2:not([hidden])');
     if (!h2) return;
     const btn = el('button', 'fold');
     btn.type = 'button';
@@ -870,8 +693,6 @@
     section.querySelector('.section-head').addEventListener('click', () => setFolded(section, !section.classList.contains('folded')));
     if (folded.includes(section.id)) setFolded(section, true); else btn.setAttribute('aria-expanded', 'true');
   });
-  // a menu link opens its section
-  document.querySelectorAll('nav a[href^="#"]').forEach((a) => a.addEventListener('click', () => { const s = document.querySelector(a.getAttribute('href')); if (s?.classList.contains('folded')) setFolded(s, false); }));
 
   loadAll().then(schedule);
 })();

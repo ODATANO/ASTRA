@@ -2,11 +2,15 @@
  * ASTRA server hooks: start the aggregation scheduler once the CAP services are
  * served, stop it on shutdown. SKIP_AUTO_INIT=true (tests) skips both.
  *
- * Also mounts /api/networks for the dashboard's network switch: which sister
- * instances (one ASTRA per network) are reachable right now, probed from here so
- * the browser needs no CORS. ASTRA_NETWORKS overrides the list.
+ * Also serves the dashboard (/, /cardano, /midnight; the page reads the chain from
+ * the path, the server fills the title and share tags per path and origin) and
+ * /api/networks: which sister instances (ASTRA_NETWORKS, one instance per network)
+ * answer right now, probed from here so the browser needs no CORS.
  */
 import cds from '@sap/cds';
+import fs from 'node:fs';
+import path from 'node:path';
+import type { Application, Request, Response } from 'express';
 import { startScheduler, stopScheduler } from './aggregator/scheduler';
 import { ensureDbIndexes } from './aggregator/db-indexes';
 import { guardPostgresPools } from './pg-guard';
@@ -18,15 +22,13 @@ guardPostgresPools();
 
 // ---------------------------------------------------------------- sister instances
 
-/** `preview=https://astra.preview.odatano.dev,preprod=...` — the hosts follow the API pages (api.<network>.odatano.dev). */
-const DEFAULT_NETWORKS = 'preview=https://astra.preview.odatano.dev,preprod=https://astra.preprod.odatano.dev,mainnet=https://astra.odatano.dev';
 const PROBE_TIMEOUT_MS = 3000;
 const PROBE_TTL_MS = 60_000;
 
 interface NetworkEntry { id: string; url: string; up: boolean | null }
 
 function configuredNetworks(): NetworkEntry[] {
-  const raw = process.env.ASTRA_NETWORKS ?? DEFAULT_NETWORKS;
+  const raw = process.env.ASTRA_NETWORKS ?? '';
   return raw.split(',').map(s => s.trim()).filter(Boolean).map(pair => {
     const i = pair.indexOf('=');
     const id = (i < 0 ? pair : pair.slice(0, i)).trim();
@@ -72,14 +74,66 @@ function networksReport() {
   return value;
 }
 
-cds.on('bootstrap', (app: any) => {
-  app.get('/api/networks', async (_req: any, res: any) => {
+// ---------------------------------------------------------------- dashboard pages
+
+interface PageMeta { title: string; description: string; image: string }
+const PAGE_META: Record<string, PageMeta> = {
+  all: {
+    title: 'ODATANO ASTRA',
+    description: 'Live analytics for Cardano and Midnight: blocks, transactions, fees and rankings of both chains, every number with the block range it came from.',
+    image: 'og-image.png',
+  },
+  cardano: {
+    title: 'ODATANO ASTRA · Cardano',
+    description: 'Live analytics for Cardano: blocks, transactions, fees, tokens, stake and governance, every number with the block range it came from.',
+    image: 'og-cardano.png',
+  },
+  midnight: {
+    title: 'ODATANO ASTRA · Midnight',
+    description: 'Live analytics for Midnight: blocks, transactions, fees, contracts, the DUST ledger and shielded activity, every number with the block range it came from.',
+    image: 'og-midnight.png',
+  },
+};
+const PAGES: Record<string, PageMeta> = {
+  '/': PAGE_META.all, '/index.html': PAGE_META.all, '/cardano': PAGE_META.cardano, '/midnight': PAGE_META.midnight,
+};
+let indexHtml: string | null = null;
+
+function pageHtml(): string {
+  if (indexHtml) return indexHtml;
+  const html = fs.readFileSync(path.resolve(cds.root, cds.env.folders.app, 'index.html'), 'utf8');
+  if (process.env.NODE_ENV === 'production') indexHtml = html;
+  return html;
+}
+
+const escapeAttr = (s: string) => s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+
+/** Scheme and host the client asked for; a reverse proxy passes them in the X-Forwarded headers. */
+function requestOrigin(req: Request): string {
+  const first = (v: string | undefined, fallback: string) => (v ? v.split(',')[0].trim() : fallback);
+  const proto = first(req.get('x-forwarded-proto'), req.protocol || 'http');
+  const host = first(req.get('x-forwarded-host'), req.get('host') ?? 'localhost');
+  return `${proto}://${host}`;
+}
+
+cds.on('bootstrap', (app: Application) => {
+  app.get(Object.keys(PAGES), (req: Request, res: Response) => {
+    const meta = PAGES[req.path];
+    const html = pageHtml()
+      .replaceAll('__ORIGIN__', requestOrigin(req))
+      .replaceAll('__PATH__', req.path === '/index.html' ? '/' : req.path)
+      .replaceAll('__TITLE__', escapeAttr(meta.title))
+      .replaceAll('__DESCRIPTION__', escapeAttr(meta.description))
+      .replaceAll('__IMAGE__', meta.image);
+    res.type('html').send(html);
+  });
+  app.get('/api/networks', async (_req: Request, res: Response) => {
     try {
       const report = await networksReport();
       res.setHeader('Cache-Control', 'public, max-age=30');
-      res.json(report);
-    } catch (e: any) {
-      res.status(503).json({ error: e?.message ?? String(e) });
+      res.json({ ...report, apiReference: process.env.ASTRA_API_REFERENCE_URL || null });
+    } catch (e) {
+      res.status(503).json({ error: e instanceof Error ? e.message : String(e) });
     }
   });
 });
