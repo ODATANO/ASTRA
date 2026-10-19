@@ -96,14 +96,17 @@ npm run watch               # http://localhost:4004/ (dashboard), /odata/v4/anal
 
 ## Deployment
 
-ASTRA runs on the same host as the sources it reads (`docker/docker-compose.yml`: one
-container plus its own Postgres for aggregates, joined to the source containers' networks).
+A tag `vX.Y.Z` (matching `package.json`) publishes `ghcr.io/odatano/astra:X.Y.Z`
+(`.github/workflows/release.yml`: typecheck and tests first). ASTRA runs on the same host as
+the sources it reads (`docker/docker-compose.yml`: one container plus its own Postgres for
+aggregates, joined to the source containers' networks).
 
 1. Create the read-only role in both source databases: `scripts/sql/readonly-role.sql` via `psql`
    inside each source's Postgres container (the file's header shows the command).
-2. Copy the repo to the host and create `.env` from `.env.example` (the `astra_ro` URLs, the
-   source containers' Docker networks, a password for ASTRA's own Postgres).
-3. `docker compose -f docker/docker-compose.yml --env-file .env up -d --build`
+2. Put `docker/docker-compose.yml` on the host and create `.env` next to `docker/` from
+   `.env.example` (the `astra_ro` URLs, the source containers' Docker networks, a password for
+   ASTRA's own Postgres, `ASTRA_IMAGE_TAG`).
+3. `docker compose -f docker/docker-compose.yml --env-file .env up -d`
 4. `curl -s 127.0.0.1:4017/odata/v4/analytics/SyncStatus` shows the backfill; `backfilling` turns false once caught up.
 
 Nothing is published beyond loopback; a reverse proxy in front publishes the service or
