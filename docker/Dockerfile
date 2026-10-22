@@ -1,13 +1,13 @@
 # ODATANO ASTRA – analytics for Cardano and Midnight
 # Build from the repo root:  docker build -f docker/Dockerfile -t ghcr.io/odatano/astra:local .
-FROM node:22-slim AS build
+FROM node:22.23.4-slim AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --ignore-scripts
 COPY . .
 RUN npx tsc --noEmit
 
-FROM node:22-slim
+FROM node:22.23.4-slim
 ENV NODE_ENV=production \
     PORT=4004 \
     CDS_ENV=production
