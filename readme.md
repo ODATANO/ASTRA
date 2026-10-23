@@ -45,9 +45,9 @@ Ready-made entities need no metric id and take `$filter`, `$orderby`, `$top`/`$s
 | --- | --- |
 | `ChainOverview` | per chain: network, tip, lags, blocks and transactions of the last hour, fees of the last 24 h |
 | `KeyFigures` | every chain-wide metric over every window (1h, 24h, 7d, 14d, 30d): value, previous window, change in % |
-| `BlocksDaily`, `TransactionsDaily`, `FeesDaily`, `TokensDaily`, `StakeDaily` | one row per chain and UTC day with named columns |
+| `BlocksDaily`, `TransactionsDaily`, `FeesDaily`, `TokensDaily`, `StakeDaily`, `ScriptUsersDaily` | one row per chain and UTC day with named columns |
 | `StakeEpochs` | pools, live stake, DReps and voting power per epoch (Cardano) |
-| `TopTokens`, `TopPolicies`, `TopAddresses`, `TopScripts`, `TopBlockProducers`, `TopPools`, `TopDReps`, `TopDelegatedPools`, `TopVotedDReps` | rankings per chain and window |
+| `TopTokens`, `TopPolicies`, `TopAddresses`, `TopScripts`, `TopScriptsByUsers`, `TopBlockProducers`, `TopPools`, `TopDReps`, `TopDelegatedPools`, `TopVotedDReps` | rankings per chain and window |
 | `getWindow`, `getSeries`, `compare`, `getDistribution`, `getAnomalies`, `getTop`, `getConcentration` | the generic functions for one metric (`metric` is the enum `MetricId`) |
 | `Metrics`, `MetricBuckets`, `EntityBuckets`, `Snapshots`, `Reorgs`, `VerificationRuns`, `SyncStatus` | the raw aggregates and the state of the pipeline, with `$apply` |
 

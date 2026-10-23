@@ -13,7 +13,7 @@
 import cds from '@sap/cds';
 import type { Chain } from '../sources/types';
 import { quantile } from '../aggregator/histogram';
-import { mergeRow, newMerged, readBuckets, type BucketRow } from '../aggregator/store';
+import { ENTITIES, mergeRow, newMerged, readBuckets, type BucketRow } from '../aggregator/store';
 import { GRAN_MS } from '../aggregator/time';
 import { getMetric } from '../aggregator/windows';
 
@@ -199,6 +199,55 @@ export async function readStakeEpochs(db: any, chains: Chain[]): Promise<EpochRo
       byEpoch.set(epoch, row);
     }
     out.push(...byEpoch.values());
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------- script users
+
+export interface ScriptUsersRow extends Record<string, unknown> {
+  chain: Chain;
+  day: string;
+  users: number;
+  scripts: number;
+  interactions: number;
+  fromHeight: number | null;
+  toHeight: number | null;
+}
+
+/**
+ * Contract use per day from the `scriptUser` day rows: distinct wallets, distinct script
+ * addresses and the (wallet, script, transaction) triples. A wallet counts once however many scripts it met.
+ */
+export async function readScriptUsersDaily(db: any, chains: Chain[], fromDay?: string | null, toDay?: string | null, now = Date.now()): Promise<ScriptUsersRow[]> {
+  const fromMs = fromDay ? Date.parse(fromDay.slice(0, 10) + 'T00:00:00Z') : 0;
+  const toMs = toDay ? Date.parse(toDay.slice(0, 10) + 'T00:00:00Z') + GRAN_MS.day : now + GRAN_MS.day;
+  const out: ScriptUsersRow[] = [];
+  for (const chain of chains) {
+    // entityId is `script|wallet`; the wallet is what follows the separator
+    const rows: any[] = await db.run(
+      SELECT.from(ENTITIES)
+        .columns(
+          'bucketStart',
+          `count(distinct substring(entityId, indexof(entityId, '|') + 1)) as users`,
+          'count(distinct subjectId) as scripts',
+          'sum(count) as interactions',
+          'min(fromHeight) as fromHeight',
+          'max(toHeight) as toHeight',
+        )
+        .where({ chain, dimension: 'scriptUser', metricId: 'script.interactions', granularity: 'day' })
+        .where({ bucketStart: { '>=': new Date(fromMs).toISOString() } })
+        .where({ bucketStart: { '<': new Date(toMs).toISOString() } })
+        .groupBy('bucketStart'),
+    );
+    for (const r of rows) {
+      out.push({
+        chain, day: dayOf(String(r.bucketStart)),
+        users: Number(r.users ?? 0), scripts: Number(r.scripts ?? 0), interactions: Number(r.interactions ?? 0),
+        fromHeight: r.fromHeight === null || r.fromHeight === undefined ? null : Number(r.fromHeight),
+        toHeight: r.toHeight === null || r.toHeight === undefined ? null : Number(r.toHeight),
+      });
+    }
   }
   return out;
 }

@@ -83,6 +83,7 @@ type Dimension   : String(12) enum {
   pool;     // a stake pool, keyed by its bech32 pool id (epoch snapshots)
   drep;     // a delegated representative, keyed by its bech32 drep id (epoch snapshots)
   tokenHolder; // an address seen moving ONE token: entityId = address, subjectId = unit
+  scriptUser; // a wallet (stake address) seen in a transaction with ONE script address: entityId = wallet, subjectId = script address
   contract; // a contract, keyed by its address (Midnight)
   circuit;  // a circuit name, across contracts (Midnight)
 }

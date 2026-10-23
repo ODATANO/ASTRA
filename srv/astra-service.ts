@@ -10,14 +10,14 @@ import { getSource } from './aggregator/scheduler';
 import { isWindow, type Window } from './aggregator/time';
 import { activeChains, getAggregator, runNow } from './aggregator/scheduler';
 import { applyQuery, bounds, parseQuery, pinned, type ParsedQuery } from './views/query';
-import { DAILY_VIEWS, readDailyView, readStakeEpochs } from './views/daily';
+import { DAILY_VIEWS, readDailyView, readScriptUsersDaily, readStakeEpochs } from './views/daily';
 import { RANKINGS, readKeyFigures, readRanking } from './views/figures';
 import { viewMemo } from './views/memo';
 import type { LeaderboardWindow } from './aggregator/leaderboards';
 
 const { SELECT } = cds.ql;
 const CHAINS: Chain[] = ['cardano', 'midnight'];
-const DIMENSIONS: Dimension[] = ['token', 'policy', 'script', 'address', 'producer', 'pool', 'drep', 'tokenHolder', 'contract', 'circuit'];
+const DIMENSIONS: Dimension[] = ['token', 'policy', 'script', 'address', 'producer', 'pool', 'drep', 'tokenHolder', 'scriptUser', 'contract', 'circuit'];
 /** Fee figures of the overview are reported while the fee data reaches to within this of the newest block. */
 const FEES_CURRENT_SEC = 3600;
 
@@ -28,6 +28,7 @@ export default class AstraService extends cds.ApplicationService {
     this.on('READ', 'KeyFigures', req => this.readKeyFigures(req));
     for (const view of Object.keys(DAILY_VIEWS)) this.on('READ', view, req => this.readDaily(req, view));
     this.on('READ', 'StakeEpochs', req => this.readEpochs(req));
+    this.on('READ', 'ScriptUsersDaily', req => this.readScriptUsers(req));
     for (const name of Object.keys(RANKINGS)) this.on('READ', name, req => this.readRanking(req, name));
 
     this.on('getWindow', async req => {
@@ -185,6 +186,17 @@ export default class AstraService extends cds.ApplicationService {
     const to = day ?? (typeof b.max === 'string' ? b.max : null);
     const chains = this.chainsOf(q);
     const rows = await viewMemo.get(`daily|${view}|${chains}|${from}|${to}`, () => readDailyView(cds.db, view, chains, from, to));
+    return applyQuery(rows, q, [{ column: 'day', desc: true }, { column: 'chain' }]);
+  }
+
+  private async readScriptUsers(req: any) {
+    const q = parseQuery(req);
+    const day = pinned<string>(q, 'day')?.[0];
+    const b = bounds(q, 'day');
+    const from = day ?? (typeof b.min === 'string' ? b.min : null);
+    const to = day ?? (typeof b.max === 'string' ? b.max : null);
+    const chains = this.chainsOf(q);
+    const rows = await viewMemo.get(`scriptUsers|${chains}|${from}|${to}`, () => readScriptUsersDaily(cds.db, chains, from, to));
     return applyQuery(rows, q, [{ column: 'day', desc: true }, { column: 'chain' }]);
   }
 

@@ -68,3 +68,4 @@ midnight;zswap.outputs;Zswap outputs;counter;chain;outputs;Shielded outputs in d
 midnight;zswap.transients;Zswap transients;counter;chain;transients;Shielded transients (created and spent in one transaction) in decoded transactions
 midnight;contract.calls;Contract calls;counter;entity;calls;Decoded contract calls by contract (leaderboard dimension contract)
 midnight;circuit.calls;Circuit calls;counter;entity;calls;Decoded contract calls by circuit name, across contracts (leaderboard dimension circuit)
+cardano;script.interactions;Script interactions;counter;entity;tx;Transactions in which a wallet met a script address (dimension scriptUser; subject = the script address, open = every script)

@@ -12,13 +12,15 @@ import { MidnightSource } from '../srv/sources/midnight-source';
 import { connectSource, resetSourceCache } from '../srv/sources/source-db';
 import { ChainAggregator } from '../srv/aggregator/engine';
 import { computeSeries, computeWindow, getMetric } from '../srv/aggregator/windows';
-import { getLeaderboard } from '../srv/aggregator/leaderboards';
+import { getLeaderboard, getSubjectRanking } from '../srv/aggregator/leaderboards';
+import { stakeCredentialOf } from '../srv/aggregator/stake-address';
+import { readScriptUsersDaily } from '../srv/views/daily';
 import { applyEpochSnapshots } from '../srv/aggregator/epoch-snapshots';
 import { getConcentration, gini, nakamoto } from '../srv/aggregator/concentration';
 import { getDistribution } from '../srv/aggregator/distribution';
 import { hasReference, sampleHeights, verifySample } from '../srv/verification/sampling';
 import { CycleTimeoutError, cycleTimeoutMs, withCycleTimeout } from '../srv/aggregator/scheduler';
-import { applyEntityDeltas, prune } from '../srv/aggregator/store';
+import { applyEntityDeltas, entityHorizon, prune } from '../srv/aggregator/store';
 import { addToEntity, type EntityDeltaMap } from '../srv/aggregator/samples';
 
 const { INSERT, UPSERT, UPDATE, SELECT, DELETE } = cds.ql;
@@ -194,7 +196,7 @@ describe('backfill older than the retention window', () => {
     });
     // first chunk, then retention runs (as it does every 30th cycle in production), then the rest
     await agg.runCycle(1); // budget 1 ms → exactly one chunk
-    await cds.tx((tx: any) => prune(tx, 'cardano', 48, 90));
+    await cds.tx((tx: any) => prune(tx, 'cardano', { minuteHours: 48, hourDays: 90 }));
     await agg.runCycle(60000);
     expect((await agg.getCursor())?.lastHeight).toBe(1299);
     const day = await cds.db.run(SELECT.from('odatano.astra.MetricBuckets').where({ chain: 'cardano', granularity: 'day', metricId: 'blocks.count', bucketStart: '2026-01-01T00:00:00.000Z' }));
@@ -218,7 +220,7 @@ describe('backfill older than the retention window', () => {
     });
     await agg.runCycle(60000);
     // retention takes away the minute buckets a rewind used to rebuild the rollups from
-    await cds.tx((tx: any) => prune(tx, 'cardano', 48, 90));
+    await cds.tx((tx: any) => prune(tx, 'cardano', { minuteHours: 48, hourDays: 90 }));
 
     await agg.recompute(2100);
     await agg.runCycle(60000);
@@ -749,6 +751,32 @@ describe('entity buckets', () => {
     expect(byKey['hour@7200000']).toEqual({ count: 1, sum: 4, fromHeight: 20, toHeight: 20 });
     expect(byKey['day@0']).toEqual({ count: 5, sum: 22.5, fromHeight: 5, toHeight: 20 });
   });
+
+  it('keeps hour rows for the 24h window and day rows for the 30d window, and never writes what it would prune', async () => {
+    await cds.db.run(DELETE.from('odatano.astra.EntityBuckets').where({ chain: 'midnight' }));
+    const retention = { minuteHours: 48, hourDays: 90, entityHourDays: 3, entityDayDays: 60 };
+    const row = (granularity: string, ageDays: number) => ({
+      chain: 'midnight', dimension: 'address', entityId: `e${granularity}${ageDays}`, subjectId: '', metricId: 'value.received',
+      granularity, bucketStart: new Date(now - ageDays * 86_400_000).toISOString(), count: 1, sum: '1', fromHeight: 1, toHeight: 1,
+    });
+    await cds.db.run(INSERT.into('odatano.astra.EntityBuckets').entries([
+      row('hour', 1), row('hour', 5), row('day', 10), row('day', 70), row('epoch', 400),
+    ]));
+    await cds.tx((tx: any) => prune(tx, 'midnight', retention, now));
+    const kept = (await cds.db.run(SELECT.from('odatano.astra.EntityBuckets').columns('entityId').where({ chain: 'midnight' }))).map((r: any) => r.entityId).sort();
+    // the epoch snapshot is state, not a window, and stays whatever its age
+    expect(kept).toEqual(['eday10', 'eepoch400', 'ehour1']);
+
+    // a backfill through old blocks writes only the rows a window can still reach
+    const old: EntityDeltaMap = new Map();
+    addToEntity(old, 'address', 'b', 'value.received', (now - 10 * 86_400_000) / 1000, 1, 50);   // day row yes, hour row no
+    addToEntity(old, 'address', 'c', 'value.received', (now - 70 * 86_400_000) / 1000, 1, 40);   // neither
+    addToEntity(old, 'address', 'd', 'value.received', now / 1000, 1, 60);                        // both
+    expect(await applyEntityDeltas(cds.db, 'midnight', old, new Date(now).toISOString(), entityHorizon(retention, now))).toBe(3);
+    // 0 keeps everything: the same deltas write all six rows
+    await cds.db.run(DELETE.from('odatano.astra.EntityBuckets').where({ chain: 'midnight' }));
+    expect(await applyEntityDeltas(cds.db, 'midnight', old, new Date(now).toISOString(), entityHorizon({ ...retention, entityHourDays: 0, entityDayDays: 0 }, now))).toBe(6);
+  });
 });
 
 describe('fees filled in after the block (Midnight supplement)', () => {
@@ -1065,5 +1093,81 @@ describe('epoch rankings and a full recompute', () => {
     expect((await ranked()).pools).toEqual([]);
     await agg.runCycle(60000);
     expect(await ranked()).toEqual(expected);
+  });
+});
+
+describe('contract users', () => {
+  // a preprod wallet: a key address and an order-style script address that share one stake key
+  const WALLET_ADDR = 'addr_test1qqlu2mkwq30canztghvwv9hu77xzghp5g5ynkvjfgxnkcv7enaq4hcm9rhuz5hly8dwech3hsk56fxqtd9zzhpvvxx0stfmuyt';
+  const ORDER_ADDR = 'addr_test1zqtrglumrq3wpfpvhkks33nym0txzd05eell2x6mcqgcm7wenaq4hcm9rhuz5hly8dwech3hsk56fxqtd9zzhpvvxx0sumapdl';
+  const WALLET = 'stake_test1urve7s2mudj3m7p2tljrkhvutcmct2dynq9kj3ptskxrr8ckmd4vt';
+  const POOL_ADDR = 'addr_test1w' + 'c'.repeat(52);     // enterprise script address: no stake part
+  const OTHER_ADDR = 'addr_test1q' + 'd'.repeat(40);    // not decodable: the address itself is the wallet
+  const OTHER_POOL = 'addr_test1w' + 'e'.repeat(52);
+
+  it('derives the stake address from a base address and nothing from the other forms', () => {
+    expect(stakeCredentialOf(WALLET_ADDR)).toEqual({ stakeAddress: WALLET, isScript: false });
+    expect(stakeCredentialOf(ORDER_ADDR)).toEqual({ stakeAddress: WALLET, isScript: false });
+    expect(stakeCredentialOf(POOL_ADDR)).toBeNull();
+    expect(stakeCredentialOf(OTHER_ADDR)).toBeNull();
+    expect(stakeCredentialOf('addr1w86cprpvnyxcdkj5hlyhmzwwumh6yrxcgctpvdv50rvkknqyhz3rc')).toBeNull();
+  });
+
+  it('counts wallets per script and across scripts, leaves reference and collateral inputs out', async () => {
+    resetSourceCache();
+    const db = await connectSource('cardano', sqliteFile('cardano-script-users.sqlite'));
+    for (const e of ['EntityBuckets', 'MetricBuckets', 'ChainCursors']) {
+      await cds.db.run(DELETE.from(`odatano.astra.${e}`).where({ chain: 'cardano' }));
+    }
+    // today, shortly after midnight UTC, so every transaction lands in one day bucket
+    const startSec = Math.floor(now / 86_400_000) * 86_400 + 60;
+    const blocks: any[] = [], txs: any[] = [], outs: any[] = [], ins: any[] = [];
+    const tx = (i: number, inputs: Array<[string, Partial<{ isCollateral: boolean; isReference: boolean }>?]>, outputs: string[]) => {
+      const height = 9000 + i, t = startSec + i * 20, txSeq = height * 20 * 65536;
+      const bh = `sb${i}`.padEnd(64, '0');
+      blocks.push({ hash: bh, time: new Date(t * 1000).toISOString(), height, slot: height * 20, size: 400, txCount: 1, fees: 170000 });
+      txs.push({ hash: `stx${i}`.padEnd(64, '0'), txSeq, blockHash: bh, blockHeight: height, blockTime: t, slot: height * 20, txIndex: 0, fee: 170000, size: null, hasMetadata: false });
+      inputs.forEach(([address, flags], inputIndex) => ins.push({ txSeq, inputIndex, address_address: address, isCollateral: false, isReference: false, ...flags }));
+      outputs.forEach((address, outputIndex) => outs.push({ txSeq, outputIndex, address_address: address }));
+      return t;
+    };
+    tx(0, [[WALLET_ADDR]], [POOL_ADDR]);                                     // the wallet places an order at the pool
+    tx(1, [[POOL_ADDR], [WALLET_ADDR, { isReference: true }], [OTHER_ADDR, { isCollateral: true }]], [OTHER_ADDR, POOL_ADDR]); // a batcher pays another wallet
+    tx(2, [[WALLET_ADDR]], [ORDER_ADDR]);                                    // an order that stays in the wallet
+    tx(3, [[POOL_ADDR]], [ORDER_ADDR]);                                      // the pool fills it: the owner met the pool
+    const last = tx(4, [[POOL_ADDR]], [OTHER_POOL]);                        // script to script: nobody
+    await db.run(INSERT.into('odatano.cardano.Blocks').entries(blocks));
+    await db.run(INSERT.into('odatano.cardano.Transactions').entries(txs));
+    await db.run(INSERT.into('odatano.cardano.TransactionOutputs').entries(outs));
+    await db.run(INSERT.into('odatano.cardano.TransactionInputs').entries(ins));
+    await db.run(UPSERT.into('odatano.cardano.CardanoSyncState').entries({
+      ID: 'SINGLETON', network: 'preprod', startSlot: 9000 * 20, lastSlot: 9004 * 20,
+      lastBlockHash: 'sb4'.padEnd(64, '0'), lastHeight: 9004, tipHeight: 9004, syncStatus: 'synced',
+    }));
+    const agg = new ChainAggregator('cardano', new CardanoSource(db), {
+      chunkBlocks: 10, startTime: new Date((startSec - 60) * 1000).toISOString(), leaseMs: 60000,
+      retention: { minuteHours: 48, hourDays: 90 }, log: { info() {}, warn() {} },
+    });
+    await agg.runCycle(60000);
+    const at = last * 1000;
+
+    // the pool met two wallets, one of them twice (order placed, order filled); the order address only its owner
+    const pool = await getLeaderboard(cds.db, 'cardano', 'scriptUser', 'script.interactions', '24h', 10, 'count', at, POOL_ADDR);
+    expect(pool.rows.map(r => [r.entityId, r.count])).toEqual([[WALLET, 2], [OTHER_ADDR, 1]]);
+    const order = await getLeaderboard(cds.db, 'cardano', 'scriptUser', 'script.interactions', '24h', 10, 'count', at, ORDER_ADDR);
+    expect(order.rows.map(r => [r.entityId, r.count])).toEqual([[WALLET, 2]]);
+    // across all scripts a wallet counts once, with its interactions added up
+    const all = await getLeaderboard(cds.db, 'cardano', 'scriptUser', 'script.interactions', '24h', 10, 'count', at);
+    expect(all.entities).toBe(2);
+    expect(all.rows.map(r => [r.entityId, r.count])).toEqual([[WALLET, 4], [OTHER_ADDR, 1]]);
+    // scripts by wallets: count = wallets, sum = the transactions behind them
+    const scripts = await getSubjectRanking(cds.db, 'cardano', 'scriptUser', 'script.interactions', '24h', 10, at);
+    expect(scripts.rows.map(r => [r.entityId, r.count, r.sum])).toEqual([[POOL_ADDR, 2, 3], [ORDER_ADDR, 1, 2]]);
+    // the day view: distinct wallets and scripts, and the pairs' transactions
+    const daily = await readScriptUsersDaily(cds.db, ['cardano'], null, null, at);
+    expect(daily.map(r => [r.users, r.scripts, r.interactions])).toEqual([[2, 2, 5]]);
+    // reference and collateral inputs are not spent: 5 real inputs, not 7
+    expect((await computeWindow(cds.db, 'cardano', 'utxo.spent', '24h', at)).count).toBe(5);
+    expect((await computeWindow(cds.db, 'cardano', 'utxo.created', '24h', at)).count).toBe(6);
   });
 });

@@ -10,12 +10,13 @@ import cds from '@sap/cds';
 import type { Chain, ChainSource } from '../sources/types';
 import { configuredChains, openChainSource, reopenChainSource } from '../sources';
 import { ChainAggregator } from './engine';
+import type { Retention } from './store';
 
 export interface AstraConfig {
   pollMs: number;
   chunkBlocks: number;
   startTime: string;
-  retention: { minuteHours: number; hourDays: number };
+  retention: Retention;
   cycleBudgetMs?: number;
   /**
    * A cycle that has not returned after this long is given up: its error is
@@ -36,6 +37,8 @@ export function astraConfig(): AstraConfig {
     retention: {
       minuteHours: Number(env.ASTRA_RETENTION_MINUTE_HOURS || c.retention?.minuteHours || 48),
       hourDays: Number(env.ASTRA_RETENTION_HOUR_DAYS || c.retention?.hourDays || 90),
+      entityHourDays: Number(env.ASTRA_RETENTION_ENTITY_HOUR_DAYS ?? c.retention?.entityHourDays ?? 3),
+      entityDayDays: Number(env.ASTRA_RETENTION_ENTITY_DAY_DAYS ?? c.retention?.entityDayDays ?? 60),
     },
     cycleBudgetMs: Number(env.ASTRA_CYCLE_BUDGET_MS || c.cycleBudgetMs || 20000),
     cycleTimeoutMs: Number(env.ASTRA_CYCLE_TIMEOUT_MS || c.cycleTimeoutMs || 0) || undefined,

@@ -13,10 +13,10 @@ import os from 'node:os';
 import { mkdtempSync } from 'node:fs';
 import { register } from 'tsx/cjs/api';
 import cds from '@sap/cds';
-import '../srv/server'; // the bootstrap hook that serves the old service path
+import '../srv/server'; // the bootstrap hook that serves the dashboard pages
 import { addSample } from '../srv/aggregator/histogram';
 import { newMerged, toRow, type Merged } from '../srv/aggregator/store';
-import { DAILY_VIEWS, readDailyView, readStakeEpochs } from '../srv/views/daily';
+import { DAILY_VIEWS, readDailyView, readScriptUsersDaily, readStakeEpochs } from '../srv/views/daily';
 import { RANKINGS, readKeyFigures, readRanking } from '../srv/views/figures';
 import { applyQuery, parseQuery } from '../srv/views/query';
 
@@ -89,6 +89,10 @@ beforeAll(async () => {
   for (const [id, sum] of [['pool1', 5_000_000], ['pool2', 7_000_000]] as const) {
     ents.push({ chain: 'cardano', dimension: 'pool', entityId: id, subjectId: '', metricId: 'stake.live', granularity: 'epoch', bucketStart: iso(today), count: 1, sum, fromHeight: 1000, toHeight: 1000, computedAt: at });
   }
+  // contract users: two wallets at script A, one of them at script B as well
+  for (const [script, wallet, count] of [['scriptA', 'w1', 3], ['scriptA', 'w2', 1], ['scriptB', 'w1', 2]] as const) {
+    ents.push({ chain: 'cardano', dimension: 'scriptUser', entityId: `${script}|${wallet}`, subjectId: script, metricId: 'script.interactions', granularity: 'day', bucketStart: iso(today), count, sum: count, fromHeight: 1000, toHeight: 1009, computedAt: at });
+  }
   await cds.db.run(INSERT.into('odatano.astra.EntityBuckets').entries(ents));
 
   await cds.db.run(INSERT.into('odatano.astra.Snapshots').entries([
@@ -102,14 +106,6 @@ beforeAll(async () => {
 afterAll(async () => { await new Promise(r => server?.close(r)); });
 
 describe('catalogue and enum', () => {
-  it('answers the old service path like the new one', async () => {
-    const now = await fetch(url + '/odata/v4/analytics/SyncStatus?$top=1');
-    const old = await fetch(url + '/odata/v4/astra/SyncStatus?$top=1');
-    expect(old.status).toBe(now.status);
-    expect(await old.text()).toBe(await now.text());
-    expect((await fetch(url + '/odata/v4/astra-x/SyncStatus')).status).toBe(404);
-  });
-
   it('MetricId lists exactly the ids of the catalogue', () => {
     const def: any = cds.model!.definitions['AstraService.MetricId'];
     const inEnum = new Set(Object.values(def.enum as Record<string, { val: string }>).map(e => e.val));
@@ -243,6 +239,13 @@ describe('key figures and rankings', () => {
     expect(rows[0].entities).toBe(3);
     expect(rows[0].unit).toBe('moves');
   });
+  it('TopScriptsByUsers ranks scripts by distinct wallets, and ScriptUsersDaily counts each wallet once', async () => {
+    const rows = await readRanking(cds.db, 'TopScriptsByUsers', ['cardano'], ['7d'], 20);
+    expect(rows.map(r => [r.entityId, r.count, Number(r.sum)])).toEqual([['scriptA', 2, 4], ['scriptB', 1, 2]]);
+    expect(rows[0].entities).toBe(2);
+    const daily = await readScriptUsersDaily(cds.db, ['cardano']);
+    expect(daily.map(r => [r.day, r.users, r.scripts, r.interactions])).toEqual([[dayOf(today), 2, 2, 6]]);
+  });
   it('TopPools reads the newest epoch snapshot by stake', async () => {
     const rows = await readRanking(cds.db, 'TopPools', ['cardano'], null, 20);
     expect(rows.map(r => [r.window, r.entityId])).toEqual([['epoch', 'pool2'], ['epoch', 'pool1']]);
@@ -256,6 +259,14 @@ describe('through the OData service', () => {
     expect(r.json.value).toHaveLength(2);
     expect(r.json.value[0].day).toBe(dayOf(today));
     expect(Number(r.json.value[0].totalFees)).toBe(2000);
+  });
+  it('serves the contract users through the ranking and the daily view', async () => {
+    const top = await get(`/TopScriptsByUsers?$filter=window eq '7d' and rank le 1`);
+    expect(top.status, JSON.stringify(top.json)).toBe(200);
+    expect(top.json.value.map((r: any) => [r.entityId, r.count])).toEqual([['scriptA', 2]]);
+    const daily = await get(`/ScriptUsersDaily?$filter=chain eq 'cardano'`);
+    expect(daily.status, JSON.stringify(daily.json)).toBe(200);
+    expect(daily.json.value.map((r: any) => [r.users, r.scripts])).toEqual([[2, 2]]);
   });
   it('a date range on TransactionsDaily spans both chains', async () => {
     const r = await get(`/TransactionsDaily?$filter=day ge ${dayOf(today - DAY)}`);

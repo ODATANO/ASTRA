@@ -250,7 +250,7 @@
     });
   }
   const ACTIVITY = ['tx', 'feesCardano', 'feesMidnight', 'distCardano', 'distMidnight', 'mixCardano', 'mixMidnight', 'empty', 'txPerBlock', 'interval',
-    'feeErrMidnight', 'supply', 'volume', 'tokenTransfers', 'utxoFlow', 'blockSize', 'contractTx', 'txSize'];
+    'feeErrMidnight', 'supply', 'volume', 'tokenTransfers', 'utxoFlow', 'blockSize', 'scriptUsers', 'contractTx', 'txSize'];
   /** median and p95 of a size distribution, bytes */
   async function sizeChart(card, chain, metric) {
     const W = state.window;
@@ -368,6 +368,14 @@
       job('tokenTransfers', (card) => sumChart(card, 'cardano', 'blocks.count', [['tokens.transfers', 'transfers']], { kind: 'bar', unit: 'moves', empty: 'No token transfers in this window yet.' }));
       job('utxoFlow', (card) => sumChart(card, 'cardano', 'blocks.count', [['utxo.created', 'created'], ['utxo.spent', 'spent']], { unit: 'utxo' }));
       job('blockSize', (card) => sizeChart(card, 'cardano', 'blocks.size'));
+      job('scriptUsers', async (card) => {
+        // the view is daily, so the 24h window shows the last seven days
+        const days = W === '24h' ? 7 : parseInt(W, 10);
+        const from = new Date(Date.now() - (days - 1) * 86400000).toISOString().slice(0, 10);
+        const { value } = await api(filter('ScriptUsersDaily', `chain eq 'cardano' and day ge ${from}`, '&$orderby=day asc'));
+        const x = value.map((r) => `${r.day}T00:00:00.000Z`);
+        draw(card, { kind: 'bar', gran: 'day', x, unit: 'wallets', fmt: fmtInt, series: [{ name: 'wallets', color: COLOR.cardano, values: value.map((r) => Number(r.users)) }], empty: 'No wallet met a contract in these days yet.' });
+      });
     }
     if (shown('midnight')) {
       job('contractTx', (card) => sumChart(card, 'midnight', 'blocks.count', [['tx.contractCalls', 'calls'], ['tx.contractDeploys', 'deploys']], { unit: 'tx', empty: 'No contract transactions in this window yet.' }));
@@ -588,6 +596,28 @@
         } catch (err) { errorState(tbl, err); }
       })());
     }
+    // contracts by wallets, with the window's active wallets and contracts on top
+    jobs.push((async () => {
+      const card = document.querySelector('[data-board="scriptUsers"]');
+      if (!visible(card)) return;
+      const tbl = card.querySelector('[data-table]'), conc = card.querySelector('[data-conc]');
+      const listPath = filter('TopScriptsByUsers', `chain eq 'cardano' and window eq '${W}' and rank le 10`);
+      const usersPath = `/getTop(chain='cardano',dimension='scriptUser',metric='script.interactions',window='${W}',limit=1,by='count',subject='')`;
+      try {
+        const [list, users] = await Promise.all([api(listPath), api(usersPath).catch(() => null)]);
+        clear(conc);
+        const rows = list.value || [];
+        if (users && Number(users.entities) > 0) {
+          conc.appendChild(stat('Active wallets', fmtInt(users.entities), null, 'met a contract'));
+          conc.appendChild(stat('Contracts', fmtInt(rows.length ? rows[0].entities : 0), null, 'script addresses met'));
+        }
+        if (!boardTable(tbl, rows, [
+          { head: 'Script address', key: 'entityId', id: true, fmt: (v) => short(v, 14, 10) },
+          { head: 'Wallets', key: 'count', num: true, fmt: fmtInt, bar: true },
+          { head: 'Transactions', key: 'sum', num: true, fmt: (v) => fmtInt(Number(v)) },
+        ])) emptyState(tbl, 'No wallet met a contract in this window yet.');
+      } catch (err) { errorState(tbl, err); }
+    })());
     const simple = [
       ['tokens', filter('TopTokens', `chain eq 'cardano' and window eq '${W}' and rank le 10`), [{ head: 'Unit', key: 'entityId', id: true, fmt: (v) => short(v, 14, 10) }, { head: 'Transfers', key: 'count', num: true, fmt: fmtInt, bar: true }], 'No token transfers in this window yet.'],
       ['policies', filter('TopPolicies', `chain eq 'cardano' and window eq '${W}' and rank le 10`), [{ head: 'Policy', key: 'entityId', id: true, fmt: (v) => short(v, 14, 10) }, { head: 'Transfers', key: 'count', num: true, fmt: fmtInt, bar: true }], 'No token transfers in this window yet.'],

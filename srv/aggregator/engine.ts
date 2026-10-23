@@ -22,9 +22,9 @@ import cds from '@sap/cds';
 import type { Chain, ChainSource, ReorgRow, TxRow } from '../sources/types';
 import {
   DECODE_DIMENSIONS, DECODE_METRICS, FEE_METRICS, computeAddressDeltas, computeAssetDeltas, computeDecodeDeltas,
-  computeDeltas, computeFeeDeltas, computeStakeDeltas, type DeltaMap, type Dimension, type EntityDeltaMap,
+  computeDeltas, computeFeeDeltas, computeScriptUserDeltas, computeStakeDeltas, type DeltaMap, type Dimension, type EntityDeltaMap,
 } from './samples';
-import { BUCKETS, ENTITIES, applyDeltas, applyEntityDeltas, dropBuckets, prune, rewindMetrics, rewindTo } from './store';
+import { BUCKETS, ENTITIES, applyDeltas, applyEntityDeltas, dropBuckets, entityHorizon, prune, rewindMetrics, rewindTo, type Retention } from './store';
 import { applyEpochSnapshots, hasEpochEntities, lastIngestedEpoch } from './epoch-snapshots';
 import { hasReference, lastVerification, verifySample } from '../verification/sampling';
 
@@ -37,7 +37,7 @@ export interface AggregatorOptions {
   /** ISO time from which history is aggregated (only used when the cursor is new). */
   startTime: string;
   leaseMs: number;
-  retention: { minuteHours: number; hourDays: number };
+  retention: Retention;
   log?: { info: (...a: unknown[]) => void; warn: (...a: unknown[]) => void; debug?: (...a: unknown[]) => void };
 }
 
@@ -303,13 +303,16 @@ export class ChainAggregator {
         const entities: EntityDeltaMap = new Map();
         const { deltas, lastBlockTime } = computeDeltas(blocks, txs, { chain: this.chain, prevBlockTime: prevTime, fees: !feesTrail, txTypes: !decodeTrail }, entities);
         if (moves.length) computeAssetDeltas(moves, deltas, entities);
-        if (addressMoves.length) computeAddressDeltas(addressMoves, deltas, entities);
+        if (addressMoves.length) {
+          computeAddressDeltas(addressMoves, deltas, entities);
+          computeScriptUserDeltas(addressMoves, entities);
+        }
         if (stake && (stake.certificates.length || stake.withdrawals.length)) computeStakeDeltas(stake, deltas, entities);
         if (abandoned()) throw new Error('cycle abandoned by the scheduler before writing its next chunk');
         const now = new Date().toISOString();
         await cds.tx(async tx => {
           await applyDeltas(tx, this.chain, deltas, now);
-          await applyEntityDeltas(tx, this.chain, entities, now);
+          await applyEntityDeltas(tx, this.chain, entities, now, entityHorizon(this.opts.retention));
           await this.advanceCursor(tx, 'lastHeight', last, {
             lastHeight: to,
             lastBlockTime: lastBlockTime ?? prevTime,
@@ -339,7 +342,7 @@ export class ChainAggregator {
 
       this.cycles++;
       if (this.cycles % 30 === 1) {
-        await cds.tx(tx => prune(tx, this.chain, this.opts.retention.minuteHours, this.opts.retention.hourDays));
+        await cds.tx(tx => prune(tx, this.chain, this.opts.retention));
       }
       result.ms = Date.now() - t0;
       await this.patchCursor(null, { lastRunAt: new Date().toISOString(), lastRunMs: result.ms, backfilling: !result.caughtUp });
@@ -401,7 +404,7 @@ export class ChainAggregator {
       const now = new Date().toISOString();
       await cds.tx(async tx => {
         await applyDeltas(tx, this.chain, deltas, now);
-        if (entities?.size) await applyEntityDeltas(tx, this.chain, entities, now);
+        if (entities?.size) await applyEntityDeltas(tx, this.chain, entities, now, entityHorizon(this.opts.retention));
         await this.advanceCursor(tx, pass.height, last, { [pass.height]: to, [pass.time]: time });
         await this.renewLease(tx);
       });

@@ -7,6 +7,7 @@
  */
 import type { AddressMoveRow, AssetMoveRow, BlockRow, Chain, StakeActivity, TxRow } from '../sources/types';
 import { addSample, emptyHistogram, type Histogram } from './histogram';
+import { stakeCredentialOf } from './stake-address';
 import { bucketStart } from './time';
 
 export interface BucketAcc {
@@ -60,7 +61,7 @@ export function addToDelta(map: DeltaMap, metricId: string, timeSec: number, val
  */
 const LOVELACE_PER_ADA = 1_000_000;
 /** Leaderboard dimensions, mirroring db/schema.cds. */
-export type Dimension = 'token' | 'policy' | 'script' | 'address' | 'producer' | 'pool' | 'drep' | 'tokenHolder' | 'contract' | 'circuit';
+export type Dimension = 'token' | 'policy' | 'script' | 'address' | 'producer' | 'pool' | 'drep' | 'tokenHolder' | 'scriptUser' | 'contract' | 'circuit';
 
 /** One entity's counter inside one period — the per-entity counterpart of BucketAcc. */
 export interface EntityAcc {
@@ -195,6 +196,36 @@ export function computeAddressDeltas(
     addToEntity(entities, 'address', m.address, metric, m.time, value, m.height);
     if (isScriptAddress(m.address)) {
       addToEntity(entities, 'script', m.address, metric, m.time, value, m.height);
+    }
+  }
+}
+
+/**
+ * Who uses which contract: one `scriptUser` row per transaction, script address and wallet in it.
+ * A wallet is the stake address of a key address, or of a script address whose stake part is a
+ * key (an order that stays in its owner's wallet). Scripts among themselves leave no row.
+ */
+export function computeScriptUserDeltas(moves: AddressMoveRow[], entities: EntityDeltaMap): void {
+  interface Parties { scripts: Set<string>; users: Set<string>; time: number; height: number }
+  const perTx = new Map<string, Parties>();
+  for (const m of moves) {
+    if (!m.address) continue;
+    let p = perTx.get(m.txHash);
+    if (!p) {
+      p = { scripts: new Set(), users: new Set(), time: m.time, height: m.height };
+      perTx.set(m.txHash, p);
+    }
+    const stake = stakeCredentialOf(m.address);
+    if (isScriptAddress(m.address)) {
+      p.scripts.add(m.address);
+      if (stake && !stake.isScript) p.users.add(stake.stakeAddress);
+    } else {
+      p.users.add(stake?.stakeAddress ?? m.address);
+    }
+  }
+  for (const p of perTx.values()) {
+    for (const script of p.scripts) {
+      for (const user of p.users) addToEntity(entities, 'scriptUser', `${script}|${user}`, 'script.interactions', p.time, 1, p.height, script);
     }
   }
 }

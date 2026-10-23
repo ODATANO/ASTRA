@@ -190,11 +190,14 @@ const ENTITY_ADD_SQL: Record<string, string> = {
       computedAt = excluded.computedAt`,
 };
 
+/** Oldest bucket start (unix ms) still written per granularity; an older row would only be pruned again. */
+export type EntityHorizon = Partial<Record<'hour' | 'day', number>>;
+
 /**
  * Adds entity deltas to their hour and day rows in the database, one statement per chunk and
  * no read: the cost follows the number of changed rows, not the size of the day.
  */
-export async function applyEntityDeltas(tx: any, chain: Chain, entities: EntityDeltaMap, now = new Date().toISOString()): Promise<number> {
+export async function applyEntityDeltas(tx: any, chain: Chain, entities: EntityDeltaMap, now = new Date().toISOString(), horizon: EntityHorizon = {}): Promise<number> {
   if (entities.size === 0) return 0;
   const sql = ENTITY_ADD_SQL[String(cds.db?.kind ?? 'sqlite')];
   if (!sql) throw new Error(`entity buckets: no additive upsert for database kind ${cds.db?.kind}`);
@@ -203,6 +206,8 @@ export async function applyEntityDeltas(tx: any, chain: Chain, entities: EntityD
   for (const e of entities.values()) {
     for (const granularity of ['hour', 'day'] as const) {
       const start = bucketStart(e.bucketStart, granularity);
+      const oldest = horizon[granularity];
+      if (oldest !== undefined && start < oldest) continue;
       const key = `${e.dimension}|${e.entityId}|${e.metricId}|${granularity}|${start}`;
       const prev = rows.get(key);
       if (!prev) {
@@ -324,8 +329,29 @@ export async function dropBuckets(tx: any, chain: Chain, fromHeight: number | nu
   await rewindTo(tx, chain, fromHeight - 1);
 }
 
-/** Retention: minute buckets older than `minuteHours`, hour buckets older than `hourDays`. */
-export async function prune(tx: any, chain: Chain, minuteHours: number, hourDays: number, now = Date.now()): Promise<void> {
-  await tx.run(DELETE.from(BUCKETS).where({ chain, granularity: 'minute', bucketStart: { '<': iso(now - minuteHours * GRAN_MS.hour) } }));
-  await tx.run(DELETE.from(BUCKETS).where({ chain, granularity: 'hour', bucketStart: { '<': iso(now - hourDays * GRAN_MS.day) } }));
+/** How long the finer levels are kept. Entity rows: hour rows serve the 24h window, day rows the 30d window; 0 = keep. */
+export interface Retention {
+  minuteHours: number;
+  hourDays: number;
+  entityHourDays?: number;
+  entityDayDays?: number;
+}
+
+/** The oldest entity bucket start still worth writing, per granularity, under this retention. */
+export function entityHorizon(r: Retention, now = Date.now()): EntityHorizon {
+  const h: EntityHorizon = {};
+  if (r.entityHourDays) h.hour = now - r.entityHourDays * GRAN_MS.day;
+  if (r.entityDayDays) h.day = now - r.entityDayDays * GRAN_MS.day;
+  return h;
+}
+
+/** Retention: metric minute and hour buckets, entity hour and day rows beyond their days. Epoch rows stay. */
+export async function prune(tx: any, chain: Chain, r: Retention, now = Date.now()): Promise<void> {
+  await tx.run(DELETE.from(BUCKETS).where({ chain, granularity: 'minute', bucketStart: { '<': iso(now - r.minuteHours * GRAN_MS.hour) } }));
+  await tx.run(DELETE.from(BUCKETS).where({ chain, granularity: 'hour', bucketStart: { '<': iso(now - r.hourDays * GRAN_MS.day) } }));
+  const h = entityHorizon(r, now);
+  for (const granularity of ['hour', 'day'] as const) {
+    if (h[granularity] === undefined) continue;
+    await tx.run(DELETE.from(ENTITIES).where({ chain, granularity, bucketStart: { '<': iso(h[granularity]!) } }));
+  }
 }

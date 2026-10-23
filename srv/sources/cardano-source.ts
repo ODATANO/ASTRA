@@ -16,6 +16,11 @@ import { num, toUnixSeconds } from './types';
 
 const { SELECT } = cds.ql;
 
+/** The columns read from TransactionInputs; the address is flattened by CAP. */
+interface InputRow { txSeq: unknown; inputIndex: number; address_address?: string | null; isCollateral?: boolean | null; isReference?: boolean | null }
+/** The columns read from TransactionInputAssets. */
+interface InputAssetRow { input_txSeq: unknown; input_inputIndex: number; unit: string; asset_policyId?: string | null; asset_quantity: unknown }
+
 /** Transactions per query: a key range on the input/output tables, an IN-list on the certificate tables. */
 const HASH_CHUNK = 400;
 
@@ -197,7 +202,7 @@ export class CardanoSource implements ChainSource {
           .columns('input_txSeq', 'input_inputIndex', 'unit', 'asset_policyId', 'asset_quantity')
           .where({ input_txSeq: range })),
         this.run(SELECT.from(E.Outputs).columns('txSeq', 'outputIndex', 'address_address').where({ txSeq: range })),
-        this.run(SELECT.from(E.Inputs).columns('txSeq', 'inputIndex', 'address_address').where({ txSeq: range })),
+        this.run(SELECT.from(E.Inputs).columns('txSeq', 'inputIndex', 'address_address', 'isCollateral', 'isReference').where({ txSeq: range })),
       ]);
       const addrOf = (rows: any[], idxKey: string) => {
         const m = new Map<string, string>();
@@ -205,7 +210,9 @@ export class CardanoSource implements ChainSource {
         return m;
       };
       collect(outs, 'output_txSeq', 'out', 'output_outputIndex', addrOf(outAddr, 'outputIndex'));
-      collect(ins, 'input_txSeq', 'in', 'input_inputIndex', addrOf(inAddr, 'inputIndex'));
+      // collateral and reference inputs are read, not spent: their tokens neither move nor burn
+      const unspent = new Set((inAddr as InputRow[]).filter(r => r.isCollateral || r.isReference).map(r => `${String(r.txSeq)}#${r.inputIndex}`));
+      collect((ins as InputAssetRow[]).filter(r => !unspent.has(`${String(r.input_txSeq)}#${r.input_inputIndex}`)), 'input_txSeq', 'in', 'input_inputIndex', addrOf(inAddr, 'inputIndex'));
     }
     return out;
   }
@@ -245,7 +252,7 @@ export class CardanoSource implements ChainSource {
         this.run(SELECT.from(E.Outputs).columns('txSeq', 'outputIndex', 'address_address').where({ txSeq: range })),
         this.run(SELECT.from(E.OutputAssets).columns('output_txSeq', 'output_outputIndex', 'asset_quantity')
           .where({ output_txSeq: range }).where({ unit: 'lovelace' })),
-        this.run(SELECT.from(E.Inputs).columns('txSeq', 'inputIndex', 'address_address').where({ txSeq: range })),
+        this.run(SELECT.from(E.Inputs).columns('txSeq', 'inputIndex', 'address_address', 'isCollateral', 'isReference').where({ txSeq: range })),
         this.run(SELECT.from(E.InputAssets).columns('input_txSeq', 'input_inputIndex', 'asset_quantity')
           .where({ input_txSeq: range }).where({ unit: 'lovelace' })),
       ]);
@@ -260,6 +267,8 @@ export class CardanoSource implements ChainSource {
 
       const push = (rows: any[], idxKey: string, amounts: Map<string, number>, side: 'in' | 'out') => {
         for (const r of rows) {
+          // collateral and reference inputs are read, not spent: neither moves value
+          if (r.isCollateral || r.isReference) continue;
           const seq = String(r.txSeq);
           const tx = at.get(seq);
           const address = r.address_address;

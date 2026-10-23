@@ -67,6 +67,7 @@ service AstraService {
     withdrawals_count = 'withdrawals.count';
     withdrawals_value = 'withdrawals.value';
     withdrawals_zero = 'withdrawals.zero';
+    script_interactions = 'script.interactions';
     stake_delegations = 'stake.delegations';
     governance_voteDelegations = 'governance.voteDelegations';
     tx_system = 'tx.system';
@@ -264,6 +265,21 @@ service AstraService {
         toHeight             : Integer64;
   }
 
+  /**
+   * Contract use per UTC day (Cardano): wallets (stake addresses) that met a script address in a
+   * transaction, the script addresses met, and the (wallet, script, transaction) triples.
+   */
+  @readonly @cds.persistence.skip
+  entity ScriptUsersDaily {
+    key chain        : astra.Chain;
+    key day          : Date;
+        users        : Integer64;
+        scripts      : Integer64;
+        interactions : Integer64;
+        fromHeight   : Integer64;
+        toHeight     : Integer64;
+  }
+
   /** Stake and governance per epoch (Cardano): the snapshot ASTRA took at the epoch boundary. */
   @readonly @cds.persistence.skip
   entity StakeEpochs {
@@ -303,6 +319,8 @@ service AstraService {
   @readonly @cds.persistence.skip entity TopAddresses      : RankingRow {}
   /** Script addresses by value received (ADA). */
   @readonly @cds.persistence.skip entity TopScripts        : RankingRow {}
+  /** Script addresses by distinct wallets met in the window: count = wallets, sum = their transactions with the script. */
+  @readonly @cds.persistence.skip entity TopScriptsByUsers : RankingRow {}
   /** Block producers by blocks produced (sum = bytes). Pool id on Cardano, author on Midnight. */
   @readonly @cds.persistence.skip entity TopBlockProducers : RankingRow {}
   /** Pools by live stake in the newest epoch snapshot (window epoch). */
@@ -380,11 +398,11 @@ service AstraService {
   type LeaderboardResult {
     chain       : astra.Chain;
     dimension   : astra.Dimension;
-    /** Second axis when the dimension has one — for tokenHolder the unit that was ranked. */
+    /** Second axis when the dimension has one: the unit for tokenHolder, the script address for scriptUser (open = all scripts). */
     subject     : String(140);
     metric      : String(60);
     window      : LeaderWindow;
-    /** Distinct entities in the window — the rows below are the head of this. */
+    /** Distinct entities in the window — the rows below are the head of this. For scriptUser without a subject: the active wallets. */
     entities    : Integer;
     windowStart : Timestamp;
     windowEnd   : Timestamp;

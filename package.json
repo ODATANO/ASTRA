@@ -1,6 +1,6 @@
 {
   "name": "@odatano/astra",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "ODATANO ASTRA: analytics for Cardano and Midnight, exposed as OData V4",
   "license": "Apache-2.0",
   "author": "Maximilian Weber",
@@ -30,7 +30,8 @@
   "dependencies": {
     "@cap-js/postgres": "^3",
     "@cap-js/sqlite": "^3",
-    "@sap/cds": "^10"
+    "@sap/cds": "^10",
+    "bech32": "^2.0.0"
   },
   "devDependencies": {
     "@cap-js/cds-typer": ">=0.1",

@@ -12,7 +12,16 @@ import { GRAN_MS, bucketStart, iso, type Window } from './time';
 
 const { SELECT } = cds.ql;
 
-export type Dimension = 'token' | 'policy' | 'script' | 'address' | 'producer' | 'pool' | 'drep' | 'tokenHolder' | 'contract' | 'circuit';
+export type Dimension = 'token' | 'policy' | 'script' | 'address' | 'producer' | 'pool' | 'drep' | 'tokenHolder' | 'scriptUser' | 'contract' | 'circuit';
+
+/**
+ * Dimensions with a second axis, stored as `subject|entity` with the subject mirrored into
+ * subjectId. tokenHolder needs one subject (token quantities do not add up), scriptUser does not.
+ */
+export const PAIRED: Readonly<Record<string, { subjectRequired: boolean }>> = {
+  tokenHolder: { subjectRequired: true },
+  scriptUser: { subjectRequired: false },
+};
 
 export const LEADERBOARD_WINDOWS = ['24h', '7d', '14d', '30d', 'epoch'] as const;
 export type LeaderboardWindow = (typeof LEADERBOARD_WINDOWS)[number];
@@ -81,9 +90,9 @@ export async function collectEntities(
   now = Date.now(),
   subjectId?: string | null,
 ): Promise<EntitySet> {
-  // `tokenHolder` needs one: ranking addresses across ALL tokens at once would add quantities of
-  // unrelated units together, which is the same mistake the chain-wide token metrics avoid.
   const subject = subjectId ?? '';
+  // no subject on a paired dimension that allows it = every subject at once
+  const bySubject = subject || !PAIRED[dimension] ? { subjectId: subject } : {};
   let rows: any[];
   let windowStart: string;
   let windowEnd: string;
@@ -94,7 +103,7 @@ export async function collectEntities(
     rows = await db.run(
       SELECT.from(ENTITIES)
         .columns('entityId', 'count', 'sum', 'fromHeight', 'toHeight')
-        .where({ chain, dimension, metricId, subjectId: subject, granularity: 'epoch', bucketStart: latest }),
+        .where({ chain, dimension, metricId, ...bySubject, granularity: 'epoch', bucketStart: latest }),
     );
     windowStart = latest;
     windowEnd = latest;
@@ -104,7 +113,7 @@ export async function collectEntities(
     rows = await db.run(
       SELECT.from(ENTITIES)
         .columns('entityId', 'sum(count) as count', 'sum(sum) as sum', 'min(fromHeight) as fromHeight', 'max(toHeight) as toHeight')
-        .where({ chain, dimension, metricId, subjectId: subject, granularity: r.granularity })
+        .where({ chain, dimension, metricId, ...bySubject, granularity: r.granularity })
         .where({ bucketStart: { '>=': iso(r.start) } })
         .where({ bucketStart: { '<': iso(r.end) } })
         .groupBy('entityId'),
@@ -115,10 +124,10 @@ export async function collectEntities(
 
   const per = new Map<string, LeaderRow>();
   for (const row of rows) {
-    // tokenHolder stores `unit|address` to keep the pair unique in the key; callers get the
-    // address back, since the unit they asked for is already in `subject`
+    // a paired dimension stores `subject|entity`; callers get the entity back, and across all
+    // subjects the same entity's rows merge here into one
     const stored = String(row.entityId);
-    const id = dimension === 'tokenHolder' ? stored.slice(stored.indexOf('|') + 1) : stored;
+    const id = PAIRED[dimension] ? stored.slice(stored.indexOf('|') + 1) : stored;
     const count = Number(row.count ?? 0);
     const sum = Number(row.sum ?? 0);
     const from = row.fromHeight === null || row.fromHeight === undefined ? null : Number(row.fromHeight);
@@ -169,4 +178,43 @@ export async function getLeaderboard(
     windowEnd: set.windowEnd,
     rows: set.rows.slice(0, Math.max(1, Math.min(limit, 200))),
   };
+}
+
+/**
+ * Subjects of a paired dimension ranked by distinct entities in the window (scriptUser: scripts
+ * by wallets). Per row, `count` is the distinct entities and `sum` the events behind them.
+ */
+export async function getSubjectRanking(
+  db: any,
+  chain: Chain,
+  dimension: Dimension,
+  metricId: string,
+  window: LeaderboardWindow,
+  limit = 20,
+  now = Date.now(),
+): Promise<LeaderboardResult> {
+  const empty = (start: string, end: string): LeaderboardResult =>
+    ({ chain, dimension, subject: null, metric: metricId, window, entities: 0, windowStart: start, windowEnd: end, rows: [] });
+  if (!PAIRED[dimension]) throw new Error(`dimension '${dimension}' has no subjects to rank`);
+  if (window === 'epoch') return empty(iso(now), iso(now));
+  const r = rangeFor(window, now);
+  const rows: any[] = await db.run(
+    SELECT.from(ENTITIES)
+      .columns('subjectId', 'count(distinct entityId) as entities', 'sum(count) as count', 'min(fromHeight) as fromHeight', 'max(toHeight) as toHeight')
+      .where({ chain, dimension, metricId, granularity: r.granularity })
+      .where({ bucketStart: { '>=': iso(r.start) } })
+      .where({ bucketStart: { '<': iso(r.end) } })
+      .groupBy('subjectId'),
+  );
+  const ranked: LeaderRow[] = rows.map(row => ({
+    rank: 0,
+    entityId: String(row.subjectId),
+    count: Number(row.entities ?? 0),
+    sum: Number(row.count ?? 0),
+    fromHeight: row.fromHeight === null || row.fromHeight === undefined ? null : Number(row.fromHeight),
+    toHeight: row.toHeight === null || row.toHeight === undefined ? null : Number(row.toHeight),
+  }));
+  ranked.sort((a, b) => (b.count - a.count) || (b.sum - a.sum) || a.entityId.localeCompare(b.entityId));
+  ranked.forEach((row, i) => { row.rank = i + 1; });
+  return { ...empty(iso(r.start), iso(r.end)), entities: ranked.length, rows: ranked.slice(0, Math.max(1, Math.min(limit, 200))) };
 }

@@ -12,7 +12,7 @@
  */
 import cds from '@sap/cds';
 import type { Chain } from '../sources/types';
-import { getLeaderboard, LEADERBOARD_WINDOWS, type Dimension, type LeaderboardWindow } from '../aggregator/leaderboards';
+import { getLeaderboard, getSubjectRanking, LEADERBOARD_WINDOWS, type Dimension, type LeaderboardWindow } from '../aggregator/leaderboards';
 import { WINDOWS, type Window } from '../aggregator/time';
 import { computeWindow, getMetric, type MetricInfo } from '../aggregator/windows';
 
@@ -76,6 +76,8 @@ export interface RankingDef {
   windows: readonly LeaderboardWindow[];
   /** What `entityId` is, for the reader. */
   entity: string;
+  /** 'subjects' ranks the second axis of a paired dimension by distinct entities (count) instead of the entities themselves. */
+  of?: 'subjects';
 }
 
 const FLOW = LEADERBOARD_WINDOWS.filter(w => w !== 'epoch');
@@ -85,6 +87,7 @@ export const RANKINGS: Record<string, RankingDef> = {
   TopPolicies:       { dimension: 'policy',   metric: 'tokens.transfers',       by: 'count', windows: FLOW,      entity: 'policyId' },
   TopAddresses:      { dimension: 'address',  metric: 'value.received',         by: 'sum',   windows: FLOW,      entity: 'address' },
   TopScripts:        { dimension: 'script',   metric: 'value.received',         by: 'sum',   windows: FLOW,      entity: 'script address' },
+  TopScriptsByUsers: { dimension: 'scriptUser', metric: 'script.interactions',  by: 'count', windows: FLOW,      entity: 'script address (count = wallets, sum = their transactions with it)', of: 'subjects' },
   TopBlockProducers: { dimension: 'producer', metric: 'blocks.produced',        by: 'count', windows: FLOW,      entity: 'pool id (Cardano) / author (Midnight)' },
   TopPools:          { dimension: 'pool',     metric: 'stake.live',             by: 'sum',   windows: ['epoch'], entity: 'pool id' },
   TopDReps:          { dimension: 'drep',     metric: 'governance.votingPower', by: 'sum',   windows: ['epoch'], entity: 'DRep id' },
@@ -118,7 +121,9 @@ export async function readRanking(db: any, name: string, chains: Chain[], window
     const info = await getMetric(db, chain, def.metric);
     if (!info) continue; // this chain has no such thing (Midnight has no tokens, no pools)
     for (const w of wins) {
-      const board = await getLeaderboard(db, chain, def.dimension, def.metric, w, limit, def.by, now);
+      const board = def.of === 'subjects'
+        ? await getSubjectRanking(db, chain, def.dimension, def.metric, w, limit, now)
+        : await getLeaderboard(db, chain, def.dimension, def.metric, w, limit, def.by, now);
       for (const r of board.rows) {
         out.push({
           chain, window: w, rank: r.rank, entityId: r.entityId, count: r.count, sum: r.sum, unit: info.unit,
